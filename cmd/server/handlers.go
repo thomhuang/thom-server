@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 )
@@ -14,33 +15,44 @@ func (app *application) home(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("Hello from Thom-Server"))
 }
 
-func (app *application) ContentPost(w http.ResponseWriter, r *http.Request) {
+func (app *application) GetPostCategories(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		app.clientError(w, http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	categories, err := app.Posts.GetCategories()
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+
+	for _, category := range categories {
+		fmt.Fprintf(w, category.Category)
+	}
+}
+
+func (app *application) GetPost(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.URL.Query().Get("id"))
 	if err != nil || id < 1 {
 		app.notFound(w)
 		return
 	}
 
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
 		app.clientError(w, http.StatusMethodNotAllowed)
 
 		return
 	}
 
-	w.Write([]byte("Post View Contents!"))
-}
+	post, err := app.Posts.GetPosts(id)
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
 
-func (app *application) RegisterUser(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Allow", http.MethodPost)
-	app.clientError(w, http.StatusMethodNotAllowed)
-
-	return
-}
-
-func (app *application) LoginUser(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Allow", http.MethodPost)
-	app.clientError(w, http.StatusMethodNotAllowed)
-
-	return
+	fmt.Fprint(w, post.Title)
 }
