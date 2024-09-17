@@ -8,11 +8,8 @@ func (app *application) routes() *http.ServeMux {
 	mux.HandleFunc("/", app.home)
 
 	// Content Handling
-	mux.HandleFunc(("/content/posts", app.ContentPost))
-
-	// User Handling
-	mux.HandleFunc("/user/register", app.RegisterUser)
-	mux.HandleFunc("/user/login", app.LoginUser)
+	mux.HandleFunc("/content/categories", app.GetPostCategories)
+	mux.HandleFunc("/content/post", app.GetPost)
 
 	return mux
 }
