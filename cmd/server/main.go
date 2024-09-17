@@ -2,9 +2,11 @@ package main
 
 import (
 	"flag"
+	_ "github.com/mattn/go-sqlite3"
 	"log"
 	"net/http"
 	"os"
+	"thom-server/internal/models"
 )
 
 // We want to allow different forms of logs, namely:
@@ -13,6 +15,7 @@ import (
 type application struct {
 	errorLog *log.Logger
 	infoLog  *log.Logger
+	Posts    *models.PostModel
 }
 
 func main() {
@@ -27,10 +30,18 @@ func main() {
 	// Create a logger for writing error messages ...
 	errorLog := log.New(os.Stderr, "ERROR\t", log.Ldate|log.Ltime|log.Lshortfile)
 
+	// Connect to Posts DB
+	postsDB, postsErr := openDB("posts.db")
+	if postsErr != nil {
+		errorLog.Fatal(postsErr)
+	}
+	defer postsDB.Close()
+
 	// Initialize our application
 	app := &application{
 		errorLog: errorLog,
 		infoLog:  infoLog,
+		Posts:    &models.PostModel{DB: postsDB},
 	}
 
 	// Initialize our HTTP server with:
