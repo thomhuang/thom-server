@@ -4,4 +4,4 @@ import (
 	"errors"
 )
 
-var ErrNoRecord = errors.New("models: No matching record found")
+var ErrNoRecord = errors.New("Internal Models: No matching record found")
