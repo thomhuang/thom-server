@@ -51,7 +51,7 @@ func main() {
 	srv := &http.Server{
 		Addr:     *addr,
 		ErrorLog: errorLog,
-		Handler:  app.routes(),
+		Handler:  commonMiddleware(app.routes()),
 	}
 
 	infoLog.Printf("Starting server on %s", *addr)
