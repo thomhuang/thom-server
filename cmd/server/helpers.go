@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
 	"net/http"
@@ -17,6 +18,32 @@ func openDB(dsn string) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+func (app *application) writeJSON(w http.ResponseWriter, status int, data interface{}, headers http.Header) error {
+	js, err := json.MarshalIndent(data, "", "\t")
+	if err != nil {
+		return err
+	}
+	js = append(js, '\n')
+	for key, value := range headers {
+		w.Header()[key] = value
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, err = w.Write(js)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (app *application) httpMethodCheck(requestMethod, intendedMethod string, w http.ResponseWriter) {
+	if requestMethod != intendedMethod {
+		w.Header().Set("Allow", intendedMethod)
+		app.clientError(w, http.StatusMethodNotAllowed)
+	}
 }
 
 func (app *application) serverError(w http.ResponseWriter, err error) {
