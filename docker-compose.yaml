@@ -4,6 +4,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    environment:
+      DB_PATH: /data/thom.db
     ports:
       - "4000:4000"
     restart: always
+    volumes:
+      - thom-data:/data
+
+volumes:
+  thom-data:
