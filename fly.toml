@@ -8,6 +8,13 @@ primary_region = 'lax'
 
 [build]
 
+[env]
+  DB_PATH = '/data/thom.db'
+
+[mounts]
+  source = 'thom_data'
+  destination = '/data'
+
 [http_service]
   internal_port = 4000
   force_https = true
