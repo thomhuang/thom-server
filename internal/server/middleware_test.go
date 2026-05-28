@@ -75,7 +75,7 @@ func TestCommonMiddlewareHandlesPreflight(t *testing.T) {
 		nextCalled = true
 	}))
 
-	req := httptest.NewRequest(http.MethodOptions, "/categories", nil)
+	req := httptest.NewRequest(http.MethodOptions, "/coffee", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
 	rr := httptest.NewRecorder()
 

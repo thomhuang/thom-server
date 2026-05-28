@@ -64,7 +64,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## Project Structure & Module Organization
 
-This is a small Go 1.22 HTTP API server. The executable entrypoint lives in `cmd/server/main.go`; HTTP app wiring lives in `internal/server`. Shared server infrastructure is in `internal/server` and `internal/server/response`, auth HTTP behavior is in `internal/server/auth`, post HTTP handlers are in `internal/server/posts`, and coffee HTTP handlers are in `internal/server/coffee`. Domain and data-access code lives in `internal/posts` and `internal/coffee`, with shared data-layer errors in `internal/data`. The SQLite database used by local runs is `internal/thom.db`; treat it as application data, not a test fixture. Root-level deployment files include `Dockerfile`, `docker-compose.yaml`, `fly.toml`, and the Fly.io GitHub Actions workflow in `.github/workflows/fly-deploy.yml`.
+This is a small Go 1.22 HTTP API server. The executable entrypoint lives in `cmd/server/main.go`; HTTP app wiring lives in `internal/server`. Shared server infrastructure is in `internal/server` and `internal/server/response`, auth HTTP behavior is in `internal/server/auth`, and coffee HTTP handlers are in `internal/server/coffee`. Domain and data-access code lives in `internal/coffee`, with shared data-layer errors in `internal/data`. The SQLite database used by local runs is `internal/thom.db`; treat it as application data, not a test fixture. Root-level deployment files include `Dockerfile`, `docker-compose.yaml`, `fly.toml`, and the Fly.io GitHub Actions workflow in `.github/workflows/fly-deploy.yml`.
 
 ## Build, Test, and Development Commands
 
@@ -80,7 +80,7 @@ For local authenticated routes, copy `.env.example` to `.env.local` and replace 
 
 ## Coding Style & Naming Conventions
 
-Use standard Go formatting: run `gofmt` on changed `.go` files before committing. Keep package names short and lowercase. Export only types or methods used across packages, such as `posts.Model`, `coffee.Model`, and `server.App`; keep route handlers descriptive and action-oriented, such as `GetContentByPathName` and `CreateEntry`. Prefer small helpers in focused `internal/server` packages when behavior is shared by handlers.
+Use standard Go formatting: run `gofmt` on changed `.go` files before committing. Keep package names short and lowercase. Export only types or methods used across packages, such as `coffee.Model` and `server.App`; keep route handlers descriptive and action-oriented, such as `CreateEntry`. Prefer small helpers in focused `internal/server` packages when behavior is shared by handlers.
 
 ## Testing Guidelines
 
@@ -90,7 +90,7 @@ Place tests next to the code they cover using Go's standard `testing` package an
 
 Recent commits use short, lowercase, imperative summaries, for example `docker + fly.io deployment` and `update routes, data base, and overall qol`. Keep commits focused and mention the affected area when helpful.
 
-Pull requests should include a brief description, the routes or models changed, how the change was tested, and any deployment/configuration impact. For API behavior changes, include an example request such as `curl localhost:4000/categories` and summarize the expected response shape. Mention auth impact when changing protected routes, cookie behavior, or CORS origins.
+Pull requests should include a brief description, the routes or models changed, how the change was tested, and any deployment/configuration impact. For API behavior changes, include an example request such as `curl localhost:4000/coffee` and summarize the expected response shape. Mention auth impact when changing protected routes, cookie behavior, or CORS origins.
 
 ## Security & Configuration Tips
 

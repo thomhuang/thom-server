@@ -10,7 +10,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"thom-server/internal/coffee"
-	"thom-server/internal/posts"
 	"thom-server/internal/server"
 )
 
@@ -45,7 +44,6 @@ func main() {
 	app := server.New(
 		errorLog,
 		infoLog,
-		&posts.Model{DB: appDB},
 		coffeeModel,
 		server.Config{
 			AdminUsername:     os.Getenv("ADMIN_USERNAME"),

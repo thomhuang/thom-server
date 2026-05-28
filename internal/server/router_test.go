@@ -11,24 +11,8 @@ func TestRoutes(t *testing.T) {
 	app := newTestApp(t)
 	handler := app.commonMiddleware(app.routes())
 
-	req := httptest.NewRequest(http.MethodGet, "/categories", nil)
+	req := httptest.NewRequest(http.MethodGet, "/coffee", nil)
 	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected categories route status %d, got %d", http.StatusOK, rr.Code)
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/post/content/id?post=1", nil)
-	rr = httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected post content route status %d, got %d", http.StatusOK, rr.Code)
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/coffee", nil)
-	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
