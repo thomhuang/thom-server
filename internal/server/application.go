@@ -1,6 +1,7 @@
 package server
 
 import (
+	"io"
 	"log"
 	"net/http"
 
@@ -19,6 +20,9 @@ type App struct {
 }
 
 func New(errorLog, infoLog *log.Logger, coffeeModel *coffeedata.Model, config Config) *App {
+	if infoLog == nil {
+		infoLog = log.New(io.Discard, "", 0)
+	}
 	app := &App{
 		errorLog:  errorLog,
 		infoLog:   infoLog,
@@ -26,7 +30,7 @@ func New(errorLog, infoLog *log.Logger, coffeeModel *coffeedata.Model, config Co
 		config:    config,
 		responder: response.Responder{ErrorLog: errorLog},
 	}
-	app.auth = authhttp.New(config.authConfig(), app.responder, app.isAllowedOrigin)
+	app.auth = authhttp.New(config.authConfig(), app.responder, app.isAllowedOrigin, app.infoLog)
 
 	return app
 }

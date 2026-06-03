@@ -8,7 +8,7 @@ import (
 
 func (app *App) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	coffeeHandler := coffeehttp.New(app.coffee, app.responder)
+	coffeeHandler := coffeehttp.New(app.coffee, app.responder, app.infoLog)
 
 	mux.HandleFunc("POST /auth/login", app.auth.Login)
 	mux.HandleFunc("POST /auth/logout", app.auth.RequireAuth(app.auth.Logout))

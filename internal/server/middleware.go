@@ -1,6 +1,19 @@
 package server
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
+
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.statusCode = code
+	r.ResponseWriter.WriteHeader(code)
+}
 
 func (app *App) commonMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -19,7 +32,11 @@ func (app *App) commonMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(rec, r)
+
+		app.infoLog.Printf("%s %s %d %s", r.Method, r.URL.Path, rec.statusCode, time.Since(start))
 	})
 }
 

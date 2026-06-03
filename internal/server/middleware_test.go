@@ -1,6 +1,8 @@
 package server
 
 import (
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -8,6 +10,7 @@ import (
 
 func TestCommonMiddlewareAllowsConfiguredOrigins(t *testing.T) {
 	app := &App{
+		infoLog: log.New(io.Discard, "", 0),
 		config: Config{
 			ClientOrigins: []string{"https://app.example.com"},
 		},
@@ -46,6 +49,7 @@ func TestCommonMiddlewareAllowsConfiguredOrigins(t *testing.T) {
 
 func TestCommonMiddlewareRejectsUnconfiguredOrigins(t *testing.T) {
 	app := &App{
+		infoLog: log.New(io.Discard, "", 0),
 		config: Config{
 			ClientOrigins: []string{"https://app.example.com"},
 		},
@@ -97,6 +101,7 @@ func TestCommonMiddlewareHandlesPreflight(t *testing.T) {
 
 func TestIsAllowedOrigin(t *testing.T) {
 	app := &App{
+		infoLog: log.New(io.Discard, "", 0),
 		config: Config{
 			ClientOrigins: []string{"https://app.example.com"},
 		},

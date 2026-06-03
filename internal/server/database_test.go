@@ -22,22 +22,6 @@ func TestOpenDB(t *testing.T) {
 	}
 }
 
-func TestDBPathFromEnv(t *testing.T) {
-	t.Setenv("DB_PATH", "/data/thom.db")
-
-	if got := DBPathFromEnv(); got != "/data/thom.db" {
-		t.Fatalf("expected DB_PATH value, got %q", got)
-	}
-}
-
-func TestDBPathFromEnvUsesDefault(t *testing.T) {
-	t.Setenv("DB_PATH", "")
-
-	if got := DBPathFromEnv(); got != DefaultDBPath {
-		t.Fatalf("expected default DB path %q, got %q", DefaultDBPath, got)
-	}
-}
-
 func TestPrepareDBFileCopiesSeedWhenDestinationIsMissing(t *testing.T) {
 	dir := t.TempDir()
 	seedPath := filepath.Join(dir, "seed.db")

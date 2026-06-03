@@ -15,19 +15,19 @@ type Entry struct {
 	Origin           string `json:"origin"`
 	CoffeeVarietal   string `json:"coffeeVarietal"`
 	ProcessingMethod string `json:"processingMethod"`
-	DaysSinceRoast   string `json:"daysSinceRoast"`
-	RoasterID        string `json:"roasterId"`
-	Roaster          string `json:"roaster"`
-	BrewMethod       string `json:"brewMethod"`
-	Ratio            string `json:"ratio"`
-	Grinder          string `json:"grinder"`
-	GrindSetting     string `json:"grindSetting"`
-	Dose             string `json:"dose"`
-	YieldAmount      string `json:"yieldAmount"`
-	WaterTemperature string `json:"waterTemperature"`
-	BrewTime         string `json:"brewTime"`
-	BloomTime        string `json:"bloomTime"`
-	BloomWater       string `json:"bloomWater"`
+	DaysSinceRoast   int     `json:"daysSinceRoast"`
+	RoasterID        string  `json:"roasterId"`
+	Roaster          string  `json:"roaster"`
+	BrewMethod       string  `json:"brewMethod"`
+	Ratio            string  `json:"ratio"`
+	Grinder          string  `json:"grinder"`
+	GrindSetting     float64 `json:"grindSetting"`
+	Dose             int     `json:"dose"`
+	YieldAmount      int     `json:"yieldAmount"`
+	WaterTemperature int     `json:"waterTemperature"`
+	BrewTime         string  `json:"brewTime"`
+	BloomTime        string  `json:"bloomTime"`
+	BloomWater       int     `json:"bloomWater"`
 	PourNotes        string `json:"pourNotes"`
 	RoastLevel       string `json:"roastLevel"`
 	Notes            string `json:"notes"`
@@ -56,17 +56,6 @@ type Roaster struct {
 	CreatedAt string `json:"createdAt,omitempty"`
 }
 
-var initialCoffeeRoasters = []struct {
-	id        string
-	roaster   string
-	sortOrder int
-}{
-	{id: "sey-coffee", roaster: "Sey Coffee", sortOrder: 10},
-	{id: "onyx-coffee-lab", roaster: "Onyx Coffee Lab", sortOrder: 20},
-	{id: "black-white-coffee-roasters", roaster: "Black & White Coffee Roasters", sortOrder: 30},
-	{id: "heart-coffee", roaster: "Heart Coffee", sortOrder: 40},
-}
-
 type Model struct {
 	DB *sql.DB
 }
@@ -80,19 +69,19 @@ func (m *Model) EnsureSchema() error {
 			Origin TEXT NOT NULL DEFAULT '',
 			CoffeeVarietal TEXT NOT NULL DEFAULT '',
 			ProcessingMethod TEXT NOT NULL DEFAULT '',
-			DaysSinceRoast TEXT NOT NULL DEFAULT '',
+			DaysSinceRoast INTEGER NOT NULL DEFAULT 0,
 			RoasterID TEXT NOT NULL,
 			Roaster TEXT NOT NULL,
 			BrewMethod TEXT NOT NULL,
 			Ratio TEXT NOT NULL,
 			Grinder TEXT NOT NULL,
-			GrindSetting TEXT NOT NULL,
-			Dose TEXT NOT NULL DEFAULT '',
-			YieldAmount TEXT NOT NULL DEFAULT '',
-			WaterTemperature TEXT NOT NULL DEFAULT '',
+			GrindSetting REAL NOT NULL DEFAULT 0.0,
+			Dose INTEGER NOT NULL DEFAULT 0,
+			YieldAmount INTEGER NOT NULL DEFAULT 0,
+			WaterTemperature INTEGER NOT NULL DEFAULT 0,
 			BrewTime TEXT NOT NULL DEFAULT '',
 			BloomTime TEXT NOT NULL DEFAULT '',
-			BloomWater TEXT NOT NULL DEFAULT '',
+			BloomWater INTEGER NOT NULL DEFAULT 0,
 			PourNotes TEXT NOT NULL DEFAULT '',
 			RoastLevel TEXT NOT NULL DEFAULT '',
 			Notes TEXT NOT NULL,
@@ -118,10 +107,6 @@ func (m *Model) EnsureSchema() error {
 	}
 
 	if err := m.ensureCoffeeEntryColumns(); err != nil {
-		return err
-	}
-
-	if err := m.seedInitialRoasters(); err != nil {
 		return err
 	}
 
@@ -168,25 +153,6 @@ func (m *Model) ensureCoffeeEntryColumns() error {
 			continue
 		}
 		if _, err = m.DB.Exec("ALTER TABLE CoffeeEntries ADD COLUMN " + column.definition); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (m *Model) seedInitialRoasters() error {
-	stmt := `
-		INSERT INTO CoffeeRoasters (id, Roaster, SortOrder)
-		VALUES (?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			Roaster = excluded.Roaster,
-			SortOrder = excluded.SortOrder
-		ON CONFLICT(Roaster) DO UPDATE SET
-			SortOrder = excluded.SortOrder`
-
-	for _, roaster := range initialCoffeeRoasters {
-		if _, err := m.DB.Exec(stmt, roaster.id, roaster.roaster, roaster.sortOrder); err != nil {
 			return err
 		}
 	}

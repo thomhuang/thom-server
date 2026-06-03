@@ -89,19 +89,19 @@ func TestModelEnsureSchemaAddsCoffeeMetadataColumns(t *testing.T) {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			BrewDate TEXT NOT NULL,
 			CoffeeName TEXT NOT NULL,
-			DaysSinceRoast TEXT NOT NULL DEFAULT '',
+			DaysSinceRoast INTEGER NOT NULL DEFAULT 0,
 			RoasterID TEXT NOT NULL,
 			Roaster TEXT NOT NULL,
 			BrewMethod TEXT NOT NULL,
 			Ratio TEXT NOT NULL,
 			Grinder TEXT NOT NULL,
-			GrindSetting TEXT NOT NULL,
-			Dose TEXT NOT NULL DEFAULT '',
-			YieldAmount TEXT NOT NULL DEFAULT '',
-			WaterTemperature TEXT NOT NULL DEFAULT '',
+			GrindSetting REAL NOT NULL DEFAULT 0.0,
+			Dose INTEGER NOT NULL DEFAULT 0,
+			YieldAmount INTEGER NOT NULL DEFAULT 0,
+			WaterTemperature INTEGER NOT NULL DEFAULT 0,
 			BrewTime TEXT NOT NULL DEFAULT '',
 			BloomTime TEXT NOT NULL DEFAULT '',
-			BloomWater TEXT NOT NULL DEFAULT '',
+			BloomWater INTEGER NOT NULL DEFAULT 0,
 			PourNotes TEXT NOT NULL DEFAULT '',
 			RoastLevel TEXT NOT NULL DEFAULT '',
 			Notes TEXT NOT NULL,
@@ -123,12 +123,12 @@ func TestModelEnsureSchemaAddsCoffeeMetadataColumns(t *testing.T) {
 		Origin:           "Mbeya, Tanzania",
 		CoffeeVarietal:   "Bourbon",
 		ProcessingMethod: "Washed",
-		RoasterID:        "sey-coffee",
-		Roaster:          "Sey Coffee",
+		RoasterID:        "shoebox",
+		Roaster:          "Shoebox",
 		BrewMethod:       "v60",
 		Ratio:            "1:16",
 		Grinder:          "fellow-ode",
-		GrindSetting:     "4.2",
+		GrindSetting:     4.2,
 		Notes:            "stone fruit",
 		Rating:           5,
 	})
@@ -164,19 +164,19 @@ func TestModelEnsureSchemaHandlesSeedRoasterNameConflicts(t *testing.T) {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			BrewDate TEXT NOT NULL,
 			CoffeeName TEXT NOT NULL,
-			DaysSinceRoast TEXT NOT NULL DEFAULT '',
+			DaysSinceRoast INTEGER NOT NULL DEFAULT 0,
 			RoasterID TEXT NOT NULL,
 			Roaster TEXT NOT NULL,
 			BrewMethod TEXT NOT NULL,
 			Ratio TEXT NOT NULL,
 			Grinder TEXT NOT NULL,
-			GrindSetting TEXT NOT NULL,
-			Dose TEXT NOT NULL DEFAULT '',
-			YieldAmount TEXT NOT NULL DEFAULT '',
-			WaterTemperature TEXT NOT NULL DEFAULT '',
+			GrindSetting REAL NOT NULL DEFAULT 0.0,
+			Dose INTEGER NOT NULL DEFAULT 0,
+			YieldAmount INTEGER NOT NULL DEFAULT 0,
+			WaterTemperature INTEGER NOT NULL DEFAULT 0,
 			BrewTime TEXT NOT NULL DEFAULT '',
 			BloomTime TEXT NOT NULL DEFAULT '',
-			BloomWater TEXT NOT NULL DEFAULT '',
+			BloomWater INTEGER NOT NULL DEFAULT 0,
 			PourNotes TEXT NOT NULL DEFAULT '',
 			RoastLevel TEXT NOT NULL DEFAULT '',
 			Notes TEXT NOT NULL,
@@ -188,7 +188,7 @@ func TestModelEnsureSchemaHandlesSeedRoasterNameConflicts(t *testing.T) {
 			BrewMethod, Ratio, Grinder, GrindSetting, Notes
 		)
 		VALUES (
-			'2026-05-21', 'Legacy Sey Lot', '8', 'sey', 'Sey Coffee',
+			'2026-05-21', 'Legacy Sey Lot', 8, 'shoebox', 'Shoebox',
 			'v60', '1:16', 'fellow-ode', '4.2', 'stone fruit'
 		);`
 	if _, err = db.Exec(schema); err != nil {
@@ -200,12 +200,12 @@ func TestModelEnsureSchemaHandlesSeedRoasterNameConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	roaster, err := model.GetRoasterByName("Sey Coffee")
+	roaster, err := model.GetRoasterByName("Shoebox")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if roaster.ID != "sey-coffee" {
-		t.Fatalf("expected seeded roaster ID sey-coffee, got %q", roaster.ID)
+	if roaster.ID != "shoebox" {
+		t.Fatalf("expected seeded roaster ID shoebox, got %q", roaster.ID)
 	}
 }
 
@@ -217,11 +217,11 @@ func TestModelGetRoasters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(roasters) != 4 {
-		t.Fatalf("expected 4 seeded roasters, got %d", len(roasters))
+	if len(roasters) != 1 {
+		t.Fatalf("expected 1 seeded roaster, got %d", len(roasters))
 	}
-	if roasters[0].ID != "sey-coffee" {
-		t.Fatalf("expected first roaster sey-coffee, got %q", roasters[0].ID)
+	if roasters[0].ID != "shoebox" {
+		t.Fatalf("expected first roaster shoebox, got %q", roasters[0].ID)
 	}
 }
 
@@ -244,34 +244,34 @@ func TestModelUpsertRoaster(t *testing.T) {
 func TestModelUpsertRoasterReturnsExistingNameConflict(t *testing.T) {
 	model := newTestModel(t)
 
-	roaster, err := model.UpsertRoaster(&Roaster{ID: "sey", Roaster: "Sey Coffee"})
+	roaster, err := model.UpsertRoaster(&Roaster{ID: "sh", Roaster: "Shoebox"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if roaster.ID != "sey-coffee" {
-		t.Fatalf("expected existing roaster ID sey-coffee, got %q", roaster.ID)
+	if roaster.ID != "shoebox" {
+		t.Fatalf("expected existing roaster ID shoebox, got %q", roaster.ID)
 	}
 }
 
 func TestModelUpsertRoasterReturnsExistingIDConflict(t *testing.T) {
 	model := newTestModel(t)
 
-	roaster, err := model.UpsertRoaster(&Roaster{ID: "sey-coffee", Roaster: "Renamed Roaster"})
+	roaster, err := model.UpsertRoaster(&Roaster{ID: "shoebox", Roaster: "Renamed Roaster"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if roaster.Roaster != "Sey Coffee" {
-		t.Fatalf("expected existing roaster name Sey Coffee, got %q", roaster.Roaster)
+	if roaster.Roaster != "Shoebox" {
+		t.Fatalf("expected existing roaster name Shoebox, got %q", roaster.Roaster)
 	}
 
-	roaster, err = model.GetRoasterByID("sey-coffee")
+	roaster, err = model.GetRoasterByID("shoebox")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if roaster.Roaster != "Sey Coffee" {
-		t.Fatalf("expected stored roaster name to remain Sey Coffee, got %q", roaster.Roaster)
+	if roaster.Roaster != "Shoebox" {
+		t.Fatalf("expected stored roaster name to remain Shoebox, got %q", roaster.Roaster)
 	}
 }
 
@@ -284,19 +284,19 @@ func TestModelInsert(t *testing.T) {
 		Origin:           "Huila, Colombia",
 		CoffeeVarietal:   "Caturra",
 		ProcessingMethod: "Honey",
-		DaysSinceRoast:   "8",
-		RoasterID:        "heart-coffee",
-		Roaster:          "Heart Coffee",
+		DaysSinceRoast:   8,
+		RoasterID:        "shoebox",
+		Roaster:          "Shoebox",
 		BrewMethod:       "kalita-wave",
 		Ratio:            "1:15",
 		Grinder:          "comandante-c40",
-		GrindSetting:     "24",
-		Dose:             "18g",
-		YieldAmount:      "270g",
-		WaterTemperature: "202F",
+		GrindSetting:     24,
+		Dose:             18,
+		YieldAmount:      270,
+		WaterTemperature: 202,
 		BrewTime:         "3:05",
 		BloomTime:        "40s",
-		BloomWater:       "45g",
+		BloomWater:       45,
 		PourNotes:        "Steady pulse pours",
 		RoastLevel:       "light-medium",
 		Notes:            "red fruit and caramel",
@@ -325,12 +325,12 @@ func TestModelInsert(t *testing.T) {
 		t.Fatalf("expected processing method to persist, got %q", entry.ProcessingMethod)
 	}
 
-	roaster, err := model.GetRoasterByID("heart-coffee")
+	roaster, err := model.GetRoasterByID("shoebox")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if roaster.Roaster != "Heart Coffee" {
-		t.Fatalf("expected Heart Coffee roaster to be persisted, got %q", roaster.Roaster)
+	if roaster.Roaster != "Shoebox" {
+		t.Fatalf("expected Shoebox roaster to be persisted, got %q", roaster.Roaster)
 	}
 }
 
@@ -343,19 +343,19 @@ func TestModelUpdate(t *testing.T) {
 		Origin:           "Huila, Colombia",
 		CoffeeVarietal:   "Caturra",
 		ProcessingMethod: "Honey",
-		DaysSinceRoast:   "8",
-		RoasterID:        "heart-coffee",
-		Roaster:          "Heart Coffee",
+		DaysSinceRoast:   8,
+		RoasterID:        "shoebox",
+		Roaster:          "Shoebox",
 		BrewMethod:       "kalita-wave",
 		Ratio:            "1:15",
 		Grinder:          "comandante-c40",
-		GrindSetting:     "24",
-		Dose:             "18g",
-		YieldAmount:      "270g",
-		WaterTemperature: "202F",
+		GrindSetting:     24,
+		Dose:             18,
+		YieldAmount:      270,
+		WaterTemperature: 202,
 		BrewTime:         "3:05",
 		BloomTime:        "40s",
-		BloomWater:       "45g",
+		BloomWater:       45,
 		PourNotes:        "Steady pulse pours",
 		RoastLevel:       "light-medium",
 		Notes:            "red fruit and caramel",
@@ -388,12 +388,12 @@ func TestModelUpdateNoRecord(t *testing.T) {
 	_, err := model.Update(999, &Entry{
 		Date:         "2026-05-21",
 		CoffeeName:   "Colombia Test Lot",
-		RoasterID:    "heart-coffee",
-		Roaster:      "Heart Coffee",
+		RoasterID:    "shoebox",
+		Roaster:      "Shoebox",
 		BrewMethod:   "kalita-wave",
 		Ratio:        "1:15",
 		Grinder:      "comandante-c40",
-		GrindSetting: "24",
+		GrindSetting: 24,
 		Notes:        "red fruit and caramel",
 		Rating:       4,
 	})
@@ -447,6 +447,10 @@ func newTestModel(t *testing.T) *Model {
 		t.Fatal(err)
 	}
 
+	if _, err = db.Exec(`INSERT OR IGNORE INTO CoffeeRoasters (id, Roaster, SortOrder) VALUES ('shoebox', 'Shoebox', 10)`); err != nil {
+		t.Fatal(err)
+	}
+
 	fixture := `
 		INSERT INTO CoffeeEntries (
 			id, BrewDate, CoffeeName, Origin, CoffeeVarietal, ProcessingMethod,
@@ -456,9 +460,9 @@ func newTestModel(t *testing.T) *Model {
 		)
 		VALUES (
 			1, '2026-05-20', 'Ethiopia Test Lot', 'Yirgacheffe, Ethiopia',
-			'Heirloom', 'Washed', '10', 'sey-coffee', 'Sey Coffee',
-			'v60', '1:16', 'fellow-ode', '4.2', '20g', '320g', '203F',
-			'3:20', '45s', '50g', 'Two-pour finish', 'light',
+			'Heirloom', 'Washed', 10, 'shoebox', 'Shoebox',
+			'v60', '1:16', 'fellow-ode', 4.2, 20, 320, 203,
+			'3:20', '45s', 50, 'Two-pour finish', 'light',
 			'floral, citrus, honey', 5, '2026-05-20 12:00:00'
 		);`
 	if _, err = db.Exec(fixture); err != nil {

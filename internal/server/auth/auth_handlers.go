@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 func (app *Handler) Login(w http.ResponseWriter, r *http.Request) {
@@ -26,6 +27,7 @@ func (app *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	throttleKey := loginThrottleKey(r, request.Username)
 	if app.loginLimiter != nil {
 		if lockedUntil, locked := app.loginLimiter.isLocked(throttleKey); locked {
+			app.infoLog.Printf("LOGIN rate-limited %s (until %s)", throttleKey, lockedUntil.Format(time.RFC3339))
 			app.setRetryAfter(w, lockedUntil)
 			app.clientError(w, http.StatusTooManyRequests)
 			return
@@ -36,6 +38,7 @@ func (app *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		if app.loginLimiter != nil {
 			app.loginLimiter.recordFailure(throttleKey)
 		}
+		app.infoLog.Printf("LOGIN failed invalid credentials %s", throttleKey)
 		app.clientError(w, http.StatusUnauthorized)
 		return
 	}
@@ -60,6 +63,8 @@ func (app *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		app.serverError(w, err)
 		return
 	}
+
+	app.infoLog.Printf("LOGIN success username=%s", request.Username)
 }
 
 func (app *Handler) Logout(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +80,10 @@ func (app *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		app.serverError(w, err)
 		return
+	}
+
+	if claims, ok := claimsFromRequest(r); ok {
+		app.infoLog.Printf("LOGOUT username=%s", claims.Username)
 	}
 }
 
@@ -99,4 +108,6 @@ func (app *Handler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 		app.serverError(w, err)
 		return
 	}
+
+	app.infoLog.Printf("GET_CURRENT_USER username=%s", claims.Username)
 }

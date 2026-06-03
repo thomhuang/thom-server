@@ -69,8 +69,8 @@ func TestGetCoffeeEntryByID(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &entry); err != nil {
 		t.Fatal(err)
 	}
-	if entry.Roaster != "Sey Coffee" {
-		t.Fatalf("expected Sey Coffee, got %q", entry.Roaster)
+	if entry.Roaster != "Shoebox" {
+		t.Fatalf("expected Shoebox, got %q", entry.Roaster)
 	}
 	if entry.TastingNotes != entry.Notes {
 		t.Fatal("expected tasting notes to mirror notes")
@@ -127,11 +127,11 @@ func TestGetCoffeeRoasters(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &roasters); err != nil {
 		t.Fatal(err)
 	}
-	if len(roasters) != 4 {
-		t.Fatalf("expected 4 roasters, got %d", len(roasters))
+	if len(roasters) != 1 {
+		t.Fatalf("expected 1 roaster, got %d", len(roasters))
 	}
-	if roasters[0].ID != "sey-coffee" {
-		t.Fatalf("expected first roaster sey-coffee, got %q", roasters[0].ID)
+	if roasters[0].ID != "shoebox" {
+		t.Fatalf("expected first roaster shoebox, got %q", roasters[0].ID)
 	}
 }
 
@@ -177,11 +177,11 @@ func TestCreateCoffeeEntry(t *testing.T) {
 		"origin": " Huila, Colombia ",
 		"coffeeVarietal": " Caturra ",
 		"processingMethod": " Honey ",
-		"roaster": "Heart Coffee",
+		"roaster": "Shoebox",
 		"brewMethod": "kalita-wave",
 		"ratio": "1:15",
 		"grinder": "comandante-c40",
-		"grindSetting": "24",
+		"grindSetting": 24,
 		"notes": "red fruit and caramel",
 		"rating": 4
 	}`))
@@ -200,8 +200,8 @@ func TestCreateCoffeeEntry(t *testing.T) {
 	if entry.ID == "" {
 		t.Fatal("expected created entry ID")
 	}
-	if entry.RoasterID != "heart-coffee" {
-		t.Fatalf("expected generated roaster ID heart-coffee, got %q", entry.RoasterID)
+	if entry.RoasterID != "shoebox" {
+		t.Fatalf("expected generated roaster ID shoebox, got %q", entry.RoasterID)
 	}
 	if entry.TastingNotes != "red fruit and caramel" {
 		t.Fatalf("expected tasting notes from notes, got %q", entry.TastingNotes)
@@ -225,12 +225,12 @@ func TestCreateCoffeeEntryAcceptsTastingNotesAlias(t *testing.T) {
 		"origin": "Huila, Colombia",
 		"coffeeVarietal": "Caturra",
 		"processingMethod": "Honey",
-		"roasterId": "heart-coffee",
-		"roaster": "Heart Coffee",
+		"roasterId": "shoebox",
+		"roaster": "Shoebox",
 		"brewMethod": "kalita-wave",
 		"ratio": "1:15",
 		"grinder": "comandante-c40",
-		"grindSetting": "24",
+		"grindSetting": 24,
 		"tastingNotes": "red fruit and caramel",
 		"rating": 4
 	}`))
@@ -267,10 +267,10 @@ func TestCreateCoffeeEntryRejectsInvalidPayload(t *testing.T) {
 			body: `{
 				"date": "2026-05-21",
 				"coffeeName": "Colombia Test Lot",
-				"roaster": "Heart Coffee",
-				"brewMethod": "kalita-wave",
+				"roaster": "Shoebox",
 				"ratio": "1:15",
 				"grinder": "comandante-c40",
+				"grindSetting": 24,
 				"notes": "red fruit and caramel",
 				"rating": 4
 			}`,
@@ -280,11 +280,11 @@ func TestCreateCoffeeEntryRejectsInvalidPayload(t *testing.T) {
 			body: `{
 				"date": "May 21",
 				"coffeeName": "Colombia Test Lot",
-				"roaster": "Heart Coffee",
+				"roaster": "Shoebox",
 				"brewMethod": "kalita-wave",
 				"ratio": "1:15",
 				"grinder": "comandante-c40",
-				"grindSetting": "24",
+				"grindSetting": 24,
 				"notes": "red fruit and caramel",
 				"rating": 4
 			}`,
@@ -294,11 +294,11 @@ func TestCreateCoffeeEntryRejectsInvalidPayload(t *testing.T) {
 			body: `{
 				"date": "2026-05-21",
 				"coffeeName": "Colombia Test Lot",
-				"roaster": "Heart Coffee",
+				"roaster": "Shoebox",
 				"brewMethod": "kalita-wave",
 				"ratio": "1:15",
 				"grinder": "comandante-c40",
-				"grindSetting": "24",
+				"grindSetting": 24,
 				"notes": "red fruit and caramel",
 				"rating": 6
 			}`,
@@ -350,8 +350,8 @@ func TestUpdateCoffeeEntry(t *testing.T) {
 	if entry.Rating != 3 {
 		t.Fatalf("expected updated rating 3, got %d", entry.Rating)
 	}
-	if entry.Roaster != "Sey Coffee" {
-		t.Fatalf("expected unchanged roaster Sey Coffee, got %q", entry.Roaster)
+	if entry.Roaster != "Shoebox" {
+		t.Fatalf("expected unchanged roaster Shoebox, got %q", entry.Roaster)
 	}
 	if entry.Origin != "Nyeri, Kenya" {
 		t.Fatalf("expected updated origin, got %q", entry.Origin)
@@ -397,7 +397,7 @@ func TestUpdateCoffeeEntryRejectsInvalidPatch(t *testing.T) {
 func TestUpdateCoffeeEntryRejectsPartialRoasterPatch(t *testing.T) {
 	app := newTestHandler(t)
 	req := httptest.NewRequest(http.MethodPatch, "/coffee/1", strings.NewReader(`{
-		"roasterId": "heart-coffee"
+		"roasterId": "shoebox"
 	}`))
 	req.SetPathValue("id", "1")
 	rr := httptest.NewRecorder()
@@ -463,6 +463,10 @@ func newTestHandler(t *testing.T) *Handler {
 		t.Fatal(err)
 	}
 
+	if _, err = db.Exec(`INSERT OR IGNORE INTO CoffeeRoasters (id, Roaster, SortOrder) VALUES ('shoebox', 'Shoebox', 10)`); err != nil {
+		t.Fatal(err)
+	}
+
 	fixture := `
 		INSERT INTO CoffeeEntries (
 			id, BrewDate, CoffeeName, Origin, CoffeeVarietal, ProcessingMethod,
@@ -472,9 +476,9 @@ func newTestHandler(t *testing.T) *Handler {
 		)
 		VALUES (
 			1, '2026-05-20', 'Ethiopia Test Lot', 'Yirgacheffe, Ethiopia',
-			'Heirloom', 'Washed', '10', 'sey-coffee', 'Sey Coffee',
-			'v60', '1:16', 'fellow-ode', '4.2', '20g', '320g', '203F',
-			'3:20', '45s', '50g', 'Two-pour finish', 'light',
+			'Heirloom', 'Washed', 10, 'shoebox', 'Shoebox',
+			'v60', '1:16', 'fellow-ode', 4.2, 20, 320, 203,
+			'3:20', '45s', 50, 'Two-pour finish', 'light',
 			'floral, citrus, honey', 5, '2026-05-20 12:00:00'
 		);`
 	if _, err = db.Exec(fixture); err != nil {
@@ -484,5 +488,6 @@ func newTestHandler(t *testing.T) *Handler {
 	return New(
 		model,
 		response.Responder{ErrorLog: log.New(io.Discard, "", 0)},
+		log.New(io.Discard, "", 0),
 	)
 }

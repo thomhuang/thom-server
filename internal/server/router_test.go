@@ -83,12 +83,12 @@ func TestCoffeeMutatingRoutesForAdmin(t *testing.T) {
 			body: `{
 				"date": "2026-05-21",
 				"coffeeName": "Colombia Test Lot",
-				"roasterId": "heart-coffee",
-				"roaster": "Heart Coffee",
+				"roasterId": "shoebox",
+				"roaster": "Shoebox",
 				"brewMethod": "kalita-wave",
 				"ratio": "1:15",
 				"grinder": "comandante-c40",
-				"grindSetting": "24",
+				"grindSetting": 24,
 				"notes": "red fruit and caramel",
 				"rating": 4
 			}`,
