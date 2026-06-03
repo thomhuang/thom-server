@@ -2,6 +2,9 @@ package coffee
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,39 +17,44 @@ import (
 type Handler struct {
 	coffee    *coffeedata.Model
 	responder response.Responder
+	infoLog   *log.Logger
 }
 
-func New(model *coffeedata.Model, responder response.Responder) *Handler {
+func New(model *coffeedata.Model, responder response.Responder, infoLog *log.Logger) *Handler {
+	if infoLog == nil {
+		infoLog = log.New(io.Discard, "", 0)
+	}
 	return &Handler{
 		coffee:    model,
 		responder: responder,
+		infoLog:   infoLog,
 	}
 }
 
 type coffeeEntryPatch struct {
-	Date             *string `json:"date"`
-	CoffeeName       *string `json:"coffeeName"`
-	Origin           *string `json:"origin"`
-	CoffeeVarietal   *string `json:"coffeeVarietal"`
-	ProcessingMethod *string `json:"processingMethod"`
-	DaysSinceRoast   *string `json:"daysSinceRoast"`
-	RoasterID        *string `json:"roasterId"`
-	Roaster          *string `json:"roaster"`
-	BrewMethod       *string `json:"brewMethod"`
-	Ratio            *string `json:"ratio"`
-	Grinder          *string `json:"grinder"`
-	GrindSetting     *string `json:"grindSetting"`
-	Dose             *string `json:"dose"`
-	YieldAmount      *string `json:"yieldAmount"`
-	WaterTemperature *string `json:"waterTemperature"`
-	BrewTime         *string `json:"brewTime"`
-	BloomTime        *string `json:"bloomTime"`
-	BloomWater       *string `json:"bloomWater"`
-	PourNotes        *string `json:"pourNotes"`
-	RoastLevel       *string `json:"roastLevel"`
-	Notes            *string `json:"notes"`
-	TastingNotes     *string `json:"tastingNotes"`
-	Rating           *int    `json:"rating"`
+	Date             *string  `json:"date"`
+	CoffeeName       *string  `json:"coffeeName"`
+	Origin           *string  `json:"origin"`
+	CoffeeVarietal   *string  `json:"coffeeVarietal"`
+	ProcessingMethod *string  `json:"processingMethod"`
+	DaysSinceRoast   *int     `json:"daysSinceRoast"`
+	RoasterID        *string  `json:"roasterId"`
+	Roaster          *string  `json:"roaster"`
+	BrewMethod       *string  `json:"brewMethod"`
+	Ratio            *string  `json:"ratio"`
+	Grinder          *string  `json:"grinder"`
+	GrindSetting     *float64 `json:"grindSetting"`
+	Dose             *int     `json:"dose"`
+	YieldAmount      *int     `json:"yieldAmount"`
+	WaterTemperature *int     `json:"waterTemperature"`
+	BrewTime         *string  `json:"brewTime"`
+	BloomTime        *string  `json:"bloomTime"`
+	BloomWater       *int     `json:"bloomWater"`
+	PourNotes        *string  `json:"pourNotes"`
+	RoastLevel       *string  `json:"roastLevel"`
+	Notes            *string  `json:"notes"`
+	TastingNotes     *string  `json:"tastingNotes"`
+	Rating           *int     `json:"rating"`
 }
 
 func (h *Handler) GetEntries(w http.ResponseWriter, r *http.Request) {
@@ -95,12 +103,14 @@ func (h *Handler) GetRoasters(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateRoaster(w http.ResponseWriter, r *http.Request) {
 	var roaster coffeedata.Roaster
 	if err := json.NewDecoder(r.Body).Decode(&roaster); err != nil {
+		h.infoLog.Printf("failed to decode roaster JSON: %v", err)
 		h.responder.BadRequest(w)
 		return
 	}
 
 	normalizeCoffeeRoaster(&roaster)
-	if !isValidCoffeeRoaster(&roaster) {
+	if err := isValidCoffeeRoaster(&roaster); err != nil {
+		h.infoLog.Printf("invalid roaster: %v", err)
 		h.responder.BadRequest(w)
 		return
 	}
@@ -111,6 +121,8 @@ func (h *Handler) CreateRoaster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.infoLog.Printf("CREATE_ROASTER id=%s name=%s", createdRoaster.ID, createdRoaster.Roaster)
+
 	if err = h.responder.WriteJSON(w, http.StatusCreated, createdRoaster, nil); err != nil {
 		h.responder.ServerError(w, err)
 		return
@@ -120,12 +132,14 @@ func (h *Handler) CreateRoaster(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateEntry(w http.ResponseWriter, r *http.Request) {
 	var entry coffeedata.Entry
 	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+		h.infoLog.Printf("failed to decode coffee entry JSON: %v", err)
 		h.responder.BadRequest(w)
 		return
 	}
 
 	normalizeCoffeeEntry(&entry)
-	if !isValidCoffeeEntry(&entry) {
+	if err := isValidCoffeeEntry(&entry); err != nil {
+		h.infoLog.Printf("invalid coffee entry: %v", err)
 		h.responder.BadRequest(w)
 		return
 	}
@@ -135,6 +149,8 @@ func (h *Handler) CreateEntry(w http.ResponseWriter, r *http.Request) {
 		h.responder.ServerError(w, err)
 		return
 	}
+
+	h.infoLog.Printf("CREATE_ENTRY id=%s coffee=%s roaster=%s", createdEntry.ID, createdEntry.CoffeeName, createdEntry.Roaster)
 
 	if err = h.responder.WriteJSON(w, http.StatusCreated, createdEntry, nil); err != nil {
 		h.responder.ServerError(w, err)
@@ -150,6 +166,7 @@ func (h *Handler) UpdateEntry(w http.ResponseWriter, r *http.Request) {
 
 	var patch coffeeEntryPatch
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		h.infoLog.Printf("failed to decode coffee entry patch JSON: %v", err)
 		h.responder.BadRequest(w)
 		return
 	}
@@ -165,7 +182,8 @@ func (h *Handler) UpdateEntry(w http.ResponseWriter, r *http.Request) {
 
 	applyCoffeeEntryPatch(entry, &patch)
 	normalizeCoffeeEntry(entry)
-	if !isValidCoffeeEntry(entry) {
+	if err := isValidCoffeeEntry(entry); err != nil {
+		h.infoLog.Printf("invalid coffee entry: %v", err)
 		h.responder.BadRequest(w)
 		return
 	}
@@ -174,6 +192,8 @@ func (h *Handler) UpdateEntry(w http.ResponseWriter, r *http.Request) {
 	if h.responder.HandleDataError(w, err) {
 		return
 	}
+
+	h.infoLog.Printf("UPDATE_ENTRY id=%d coffee=%s roaster=%s", id, updatedEntry.CoffeeName, updatedEntry.Roaster)
 
 	if err = h.responder.WriteJSON(w, http.StatusOK, updatedEntry, nil); err != nil {
 		h.responder.ServerError(w, err)
@@ -191,6 +211,8 @@ func (h *Handler) DeleteEntry(w http.ResponseWriter, r *http.Request) {
 	if h.responder.HandleDataError(w, err) {
 		return
 	}
+
+	h.infoLog.Printf("DELETE_ENTRY id=%d", id)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -211,19 +233,13 @@ func normalizeCoffeeEntry(entry *coffeedata.Entry) {
 	entry.Origin = strings.TrimSpace(entry.Origin)
 	entry.CoffeeVarietal = strings.TrimSpace(entry.CoffeeVarietal)
 	entry.ProcessingMethod = strings.TrimSpace(entry.ProcessingMethod)
-	entry.DaysSinceRoast = strings.TrimSpace(entry.DaysSinceRoast)
 	entry.RoasterID = strings.TrimSpace(entry.RoasterID)
 	entry.Roaster = strings.TrimSpace(entry.Roaster)
 	entry.BrewMethod = strings.TrimSpace(entry.BrewMethod)
 	entry.Ratio = strings.TrimSpace(entry.Ratio)
 	entry.Grinder = strings.TrimSpace(entry.Grinder)
-	entry.GrindSetting = strings.TrimSpace(entry.GrindSetting)
-	entry.Dose = strings.TrimSpace(entry.Dose)
-	entry.YieldAmount = strings.TrimSpace(entry.YieldAmount)
-	entry.WaterTemperature = strings.TrimSpace(entry.WaterTemperature)
 	entry.BrewTime = strings.TrimSpace(entry.BrewTime)
 	entry.BloomTime = strings.TrimSpace(entry.BloomTime)
-	entry.BloomWater = strings.TrimSpace(entry.BloomWater)
 	entry.PourNotes = strings.TrimSpace(entry.PourNotes)
 	entry.RoastLevel = strings.TrimSpace(entry.RoastLevel)
 	entry.Notes = strings.TrimSpace(entry.Notes)
@@ -323,40 +339,53 @@ func applyCoffeeEntryPatch(entry *coffeedata.Entry, patch *coffeeEntryPatch) {
 	}
 }
 
-func isValidCoffeeEntry(entry *coffeedata.Entry) bool {
-	requiredFields := []string{
-		entry.Date,
-		entry.CoffeeName,
-		entry.RoasterID,
-		entry.Roaster,
-		entry.BrewMethod,
-		entry.Ratio,
-		entry.Grinder,
-		entry.GrindSetting,
-		entry.Notes,
+func isValidCoffeeEntry(entry *coffeedata.Entry) error {
+	requiredFields := []struct {
+		name  string
+		value string
+	}{
+		{"date", entry.Date},
+		{"coffeeName", entry.CoffeeName},
+		{"roasterId", entry.RoasterID},
+		{"roaster", entry.Roaster},
+		{"brewMethod", entry.BrewMethod},
+		{"ratio", entry.Ratio},
+		{"grinder", entry.Grinder},
+		{"notes", entry.Notes},
 	}
-	for _, field := range requiredFields {
-		if field == "" {
-			return false
+	for _, f := range requiredFields {
+		if f.value == "" {
+			return fmt.Errorf("missing required field %q", f.name)
 		}
 	}
 
 	if _, err := time.Parse("2006-01-02", entry.Date); err != nil {
-		return false
+		return fmt.Errorf("invalid date %q", entry.Date)
 	}
 
-	if entry.DaysSinceRoast != "" {
-		daysSinceRoast, err := strconv.Atoi(entry.DaysSinceRoast)
-		if err != nil || daysSinceRoast < 0 {
-			return false
-		}
+	if entry.DaysSinceRoast < 0 {
+		return fmt.Errorf("daysSinceRoast must be non-negative, got %d", entry.DaysSinceRoast)
 	}
 
-	return entry.Rating >= 0 && entry.Rating <= 5
+	if entry.GrindSetting < 0 {
+		return fmt.Errorf("grindSetting must be non-negative, got %.1f", entry.GrindSetting)
+	}
+
+	if entry.Rating < 0 || entry.Rating > 5 {
+		return fmt.Errorf("rating must be 0-5, got %d", entry.Rating)
+	}
+
+	return nil
 }
 
-func isValidCoffeeRoaster(roaster *coffeedata.Roaster) bool {
-	return roaster.ID != "" && roaster.Roaster != ""
+func isValidCoffeeRoaster(roaster *coffeedata.Roaster) error {
+	if roaster.ID == "" {
+		return fmt.Errorf("roaster id is required")
+	}
+	if roaster.Roaster == "" {
+		return fmt.Errorf("roaster name is required")
+	}
+	return nil
 }
 
 func slugifyCoffeeValue(value string) string {

@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -48,14 +50,19 @@ type Handler struct {
 	responder     response.Responder
 	loginLimiter  *loginRateLimiter
 	allowedOrigin func(string) bool
+	infoLog       *log.Logger
 }
 
-func New(config Config, responder response.Responder, allowedOrigin func(string) bool) *Handler {
+func New(config Config, responder response.Responder, allowedOrigin func(string) bool, infoLog *log.Logger) *Handler {
+	if infoLog == nil {
+		infoLog = log.New(io.Discard, "", 0)
+	}
 	return &Handler{
 		config:        config,
 		responder:     responder,
 		loginLimiter:  newLoginRateLimiter(),
 		allowedOrigin: allowedOrigin,
+		infoLog:       infoLog,
 	}
 }
 

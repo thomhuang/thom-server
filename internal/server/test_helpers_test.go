@@ -63,9 +63,9 @@ func newTestDB(t *testing.T) *sql.DB {
 		)
 		VALUES (
 			1, '2026-05-20', 'Ethiopia Test Lot', 'Yirgacheffe, Ethiopia',
-			'Heirloom', 'Washed', '10', 'sey-coffee', 'Sey Coffee',
-			'v60', '1:16', 'fellow-ode', '4.2', '20g', '320g', '203F',
-			'3:20', '45s', '50g', 'Two-pour finish', 'light',
+			'Heirloom', 'Washed', 10, 'shoebox', 'Shoebox',
+			'v60', '1:16', 'fellow-ode', 4.2, 20, 320, 203,
+			'3:20', '45s', 50, 'Two-pour finish', 'light',
 			'floral, citrus, honey', 5, '2026-05-20 12:00:00'
 		);`
 	if _, err = db.Exec(fixture); err != nil {
