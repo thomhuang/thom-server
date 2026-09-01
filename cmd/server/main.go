@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -63,7 +67,23 @@ func main() {
 		IdleTimeout:       time.Minute,
 	}
 
-	infoLog.Printf("Starting server on %s", *addr)
-	err = srv.ListenAndServe()
-	errorLog.Fatal(err)
+	shutdown := make(chan os.Signal, 1)
+	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		infoLog.Printf("Starting server on %s", *addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errorLog.Fatal(err)
+		}
+	}()
+
+	<-shutdown
+
+	infoLog.Println("stopping server")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		errorLog.Fatal(err)
+	}
+	infoLog.Println("server stopped")
 }

@@ -1,113 +1,97 @@
 package auth
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 )
 
-func (app *Handler) Login(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		app.clientError(w, http.StatusMethodNotAllowed)
-		return
-	}
+func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 
-	if !app.authConfigured() {
-		app.clientError(w, http.StatusServiceUnavailable)
+	if !h.authConfigured() {
+		h.clientError(w, http.StatusServiceUnavailable)
 		return
 	}
 
 	var request loginRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		app.clientError(w, http.StatusBadRequest)
+	if err := h.responder.DecodeJSON(w, r.Body, &request); err != nil {
+		h.clientError(w, http.StatusBadRequest)
 		return
 	}
 
 	throttleKey := loginThrottleKey(r, request.Username)
-	if app.loginLimiter != nil {
-		if lockedUntil, locked := app.loginLimiter.isLocked(throttleKey); locked {
-			app.infoLog.Printf("LOGIN rate-limited %s (until %s)", throttleKey, lockedUntil.Format(time.RFC3339))
-			app.setRetryAfter(w, lockedUntil)
-			app.clientError(w, http.StatusTooManyRequests)
-			return
-		}
-	}
-
-	if !app.validLoginCredentials(request) {
-		if app.loginLimiter != nil {
-			app.loginLimiter.recordFailure(throttleKey)
-		}
-		app.infoLog.Printf("LOGIN failed invalid credentials %s", throttleKey)
-		app.clientError(w, http.StatusUnauthorized)
+	if lockedUntil, locked := h.loginLimiter.isLocked(throttleKey); locked {
+		h.infoLog.Printf("LOGIN rate-limited %s (until %s)", throttleKey, lockedUntil.Format(time.RFC3339))
+		h.setRetryAfter(w, lockedUntil)
+		h.clientError(w, http.StatusTooManyRequests)
 		return
 	}
 
-	if app.loginLimiter != nil {
-		app.loginLimiter.recordSuccess(throttleKey)
+	if !h.validLoginCredentials(request) {
+		h.loginLimiter.recordFailure(throttleKey)
+		h.infoLog.Printf("LOGIN failed invalid credentials %s", throttleKey)
+		h.clientError(w, http.StatusUnauthorized)
+		return
 	}
 
-	token, err := app.createAuthToken(request.Username)
+	h.loginLimiter.recordSuccess(throttleKey)
+
+	token, err := h.createAuthToken(request.Username)
 	if err != nil {
-		app.serverError(w, err)
+		h.serverError(w, err)
 		return
 	}
 
-	app.setAuthCookie(w, token, int(authTokenDuration.Seconds()))
+	h.setAuthCookie(w, token, int(authTokenDuration.Seconds()))
 
-	err = app.writeJSON(w, http.StatusOK, authResponse{
+	err = h.writeJSON(w, http.StatusOK, authResponse{
 		Authenticated: true,
 		Username:      request.Username,
 	}, nil)
 	if err != nil {
-		app.serverError(w, err)
+		h.serverError(w, err)
 		return
 	}
 
-	app.infoLog.Printf("LOGIN success username=%s", request.Username)
+	h.infoLog.Printf("LOGIN success username=%s", request.Username)
 }
 
-func (app *Handler) Logout(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		app.clientError(w, http.StatusMethodNotAllowed)
-		return
+func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
+	claims, _ := claimsFromRequest(r)
+	if claims != nil {
+		if cookie, err := r.Cookie(h.authCookieName()); err == nil {
+			h.tokenDenylist.revoke(cookie.Value, time.Unix(claims.ExpiresAt, 0))
+		}
 	}
 
-	app.setAuthCookie(w, "", -1)
+	h.setAuthCookie(w, "", -1)
 
-	err := app.writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false}, nil)
+	err := h.writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false}, nil)
 	if err != nil {
-		app.serverError(w, err)
+		h.serverError(w, err)
 		return
 	}
 
-	if claims, ok := claimsFromRequest(r); ok {
-		app.infoLog.Printf("LOGOUT username=%s", claims.Username)
+	if claims != nil {
+		h.infoLog.Printf("LOGOUT username=%s", claims.Username)
 	}
 }
 
-func (app *Handler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		app.clientError(w, http.StatusMethodNotAllowed)
-		return
-	}
-
+func (h *Handler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	claims, ok := claimsFromRequest(r)
 	if !ok {
-		app.clientError(w, http.StatusUnauthorized)
+		h.clientError(w, http.StatusUnauthorized)
 		return
 	}
 
-	err := app.writeJSON(w, http.StatusOK, authResponse{
+	err := h.writeJSON(w, http.StatusOK, authResponse{
 		Authenticated: true,
 		Username:      claims.Username,
 	}, nil)
 	if err != nil {
-		app.serverError(w, err)
+		h.serverError(w, err)
 		return
 	}
 
-	app.infoLog.Printf("GET_CURRENT_USER username=%s", claims.Username)
+	h.infoLog.Printf("GET_CURRENT_USER username=%s", claims.Username)
 }

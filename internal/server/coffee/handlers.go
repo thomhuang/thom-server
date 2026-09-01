@@ -1,7 +1,6 @@
 package coffee
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -102,7 +101,7 @@ func (h *Handler) GetRoasters(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) CreateRoaster(w http.ResponseWriter, r *http.Request) {
 	var roaster coffeedata.Roaster
-	if err := json.NewDecoder(r.Body).Decode(&roaster); err != nil {
+	if err := h.responder.DecodeJSON(w, r.Body, &roaster); err != nil {
 		h.infoLog.Printf("failed to decode roaster JSON: %v", err)
 		h.responder.BadRequest(w)
 		return
@@ -131,7 +130,7 @@ func (h *Handler) CreateRoaster(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) CreateEntry(w http.ResponseWriter, r *http.Request) {
 	var entry coffeedata.Entry
-	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+	if err := h.responder.DecodeJSON(w, r.Body, &entry); err != nil {
 		h.infoLog.Printf("failed to decode coffee entry JSON: %v", err)
 		h.responder.BadRequest(w)
 		return
@@ -165,7 +164,7 @@ func (h *Handler) UpdateEntry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var patch coffeeEntryPatch
-	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+	if err := h.responder.DecodeJSON(w, r.Body, &patch); err != nil {
 		h.infoLog.Printf("failed to decode coffee entry patch JSON: %v", err)
 		h.responder.BadRequest(w)
 		return

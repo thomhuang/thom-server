@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	authCookieName       = "thom_auth"
-	authTokenDuration    = 12 * time.Hour
-	loginFailureLimit    = 5
-	loginFailureWindow   = 15 * time.Minute
-	loginLockoutDuration = 15 * time.Minute
+	defaultAuthCookieName = "thom_auth"
+	authTokenDuration     = 12 * time.Hour
+	loginFailureLimit     = 5
+	loginFailureWindow    = 15 * time.Minute
+	loginLockoutDuration  = 15 * time.Minute
 )
 
 type authContextKey string
@@ -49,6 +49,7 @@ type Handler struct {
 	config        Config
 	responder     response.Responder
 	loginLimiter  *loginRateLimiter
+	tokenDenylist *tokenDenylist
 	allowedOrigin func(string) bool
 	infoLog       *log.Logger
 }
@@ -61,12 +62,13 @@ func New(config Config, responder response.Responder, allowedOrigin func(string)
 		config:        config,
 		responder:     responder,
 		loginLimiter:  newLoginRateLimiter(),
+		tokenDenylist: newTokenDenylist(),
 		allowedOrigin: allowedOrigin,
 		infoLog:       infoLog,
 	}
 }
 
-func (h *Handler) writeJSON(w http.ResponseWriter, status int, data interface{}, headers http.Header) error {
+func (h *Handler) writeJSON(w http.ResponseWriter, status int, data any, headers http.Header) error {
 	return h.responder.WriteJSON(w, status, data, headers)
 }
 

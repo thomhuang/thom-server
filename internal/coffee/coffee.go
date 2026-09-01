@@ -201,7 +201,11 @@ func (m *Model) GetRoasters() ([]*Roaster, error) {
 }
 
 func (m *Model) UpsertRoaster(roaster *Roaster) (*Roaster, error) {
-	existingRoaster, err := m.GetRoasterByName(roaster.Roaster)
+	return m.upsertRoaster(m.DB, roaster)
+}
+
+func (m *Model) upsertRoaster(q querier, roaster *Roaster) (*Roaster, error) {
+	existingRoaster, err := getRoasterByName(q, roaster.Roaster)
 	if err == nil {
 		return existingRoaster, nil
 	}
@@ -209,7 +213,7 @@ func (m *Model) UpsertRoaster(roaster *Roaster) (*Roaster, error) {
 		return nil, err
 	}
 
-	existingRoaster, err = m.GetRoasterByID(roaster.ID)
+	existingRoaster, err = getRoasterByID(q, roaster.ID)
 	if err == nil {
 		return existingRoaster, nil
 	}
@@ -221,21 +225,25 @@ func (m *Model) UpsertRoaster(roaster *Roaster) (*Roaster, error) {
 		INSERT INTO CoffeeRoasters (id, Roaster)
 		VALUES (?, ?)`
 
-	if _, err = m.DB.Exec(stmt, roaster.ID, roaster.Roaster); err != nil {
+	if _, err = q.Exec(stmt, roaster.ID, roaster.Roaster); err != nil {
 		return nil, err
 	}
 
-	return m.GetRoasterByID(roaster.ID)
+	return getRoasterByID(q, roaster.ID)
 }
 
 func (m *Model) GetRoasterByName(name string) (*Roaster, error) {
+	return getRoasterByName(m.DB, name)
+}
+
+func getRoasterByName(q querier, name string) (*Roaster, error) {
 	stmt := `
 		SELECT id, Roaster, CreatedAt
 		FROM CoffeeRoasters
 		WHERE Roaster = ? COLLATE NOCASE`
 
 	roaster := &Roaster{}
-	err := m.DB.QueryRow(stmt, name).Scan(&roaster.ID, &roaster.Roaster, &roaster.CreatedAt)
+	err := q.QueryRow(stmt, name).Scan(&roaster.ID, &roaster.Roaster, &roaster.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, data.ErrNoRecord
@@ -247,13 +255,17 @@ func (m *Model) GetRoasterByName(name string) (*Roaster, error) {
 }
 
 func (m *Model) GetRoasterByID(id string) (*Roaster, error) {
+	return getRoasterByID(m.DB, id)
+}
+
+func getRoasterByID(q querier, id string) (*Roaster, error) {
 	stmt := `
 		SELECT id, Roaster, CreatedAt
 		FROM CoffeeRoasters
 		WHERE id = ?`
 
 	roaster := &Roaster{}
-	err := m.DB.QueryRow(stmt, id).Scan(&roaster.ID, &roaster.Roaster, &roaster.CreatedAt)
+	err := q.QueryRow(stmt, id).Scan(&roaster.ID, &roaster.Roaster, &roaster.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, data.ErrNoRecord
@@ -329,7 +341,13 @@ func (m *Model) GetByID(id int) (*Entry, error) {
 }
 
 func (m *Model) Insert(entry *Entry) (*Entry, error) {
-	roaster, err := m.UpsertRoaster(&Roaster{ID: entry.RoasterID, Roaster: entry.Roaster})
+	tx, err := m.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	roaster, err := m.upsertRoaster(tx, &Roaster{ID: entry.RoasterID, Roaster: entry.Roaster})
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +363,7 @@ func (m *Model) Insert(entry *Entry) (*Entry, error) {
 		)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	result, err := m.DB.Exec(
+	result, err := tx.Exec(
 		stmt,
 		entry.Date,
 		entry.CoffeeName,
@@ -379,11 +397,21 @@ func (m *Model) Insert(entry *Entry) (*Entry, error) {
 		return nil, err
 	}
 
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
 	return m.GetByID(int(id))
 }
 
 func (m *Model) Update(id int, entry *Entry) (*Entry, error) {
-	roaster, err := m.UpsertRoaster(&Roaster{ID: entry.RoasterID, Roaster: entry.Roaster})
+	tx, err := m.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	roaster, err := m.upsertRoaster(tx, &Roaster{ID: entry.RoasterID, Roaster: entry.Roaster})
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +444,7 @@ func (m *Model) Update(id int, entry *Entry) (*Entry, error) {
 			Rating = ?
 		WHERE id = ?`
 
-	result, err := m.DB.Exec(
+	result, err := tx.Exec(
 		stmt,
 		entry.Date,
 		entry.CoffeeName,
@@ -454,6 +482,10 @@ func (m *Model) Update(id int, entry *Entry) (*Entry, error) {
 		return nil, data.ErrNoRecord
 	}
 
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
 	return m.GetByID(id)
 }
 
@@ -480,6 +512,11 @@ func (m *Model) Delete(id int) error {
 
 type scanner interface {
 	Scan(dest ...any) error
+}
+
+type querier interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
 }
 
 func scanCoffeeEntry(s scanner) (*Entry, error) {
