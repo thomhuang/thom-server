@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func (app *Handler) createAuthToken(username string) (string, error) {
+func (h *Handler) createAuthToken(username string) (string, error) {
 	now := time.Now()
 	claims := authClaims{
 		Subject:   "admin",
@@ -34,13 +34,13 @@ func (app *Handler) createAuthToken(username string) (string, error) {
 	}
 
 	signingInput := fmt.Sprintf("%s.%s", headerSegment, claimsSegment)
-	signature := app.signAuthToken(signingInput)
+	signature := h.signAuthToken(signingInput)
 
 	return fmt.Sprintf("%s.%s", signingInput, signature), nil
 }
 
-func (app *Handler) verifyAuthToken(token string) (*authClaims, error) {
-	if app.config.JWTSecret == "" {
+func (h *Handler) verifyAuthToken(token string) (*authClaims, error) {
+	if h.config.JWTSecret == "" {
 		return nil, errors.New("auth is not configured")
 	}
 
@@ -50,7 +50,7 @@ func (app *Handler) verifyAuthToken(token string) (*authClaims, error) {
 	}
 
 	signingInput := fmt.Sprintf("%s.%s", parts[0], parts[1])
-	expectedSignature := app.signAuthToken(signingInput)
+	expectedSignature := h.signAuthToken(signingInput)
 	if !hmac.Equal([]byte(parts[2]), []byte(expectedSignature)) {
 		return nil, errors.New("invalid token signature")
 	}
@@ -74,17 +74,21 @@ func (app *Handler) verifyAuthToken(token string) (*authClaims, error) {
 		return nil, errors.New("token expired")
 	}
 
+	if h.tokenDenylist.isRevoked(token) {
+		return nil, errors.New("token revoked")
+	}
+
 	return &claims, nil
 }
 
-func (app *Handler) signAuthToken(input string) string {
-	mac := hmac.New(sha256.New, []byte(app.config.JWTSecret))
+func (h *Handler) signAuthToken(input string) string {
+	mac := hmac.New(sha256.New, []byte(h.config.JWTSecret))
 	mac.Write([]byte(input))
 
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func encodeJSONSegment(value interface{}) (string, error) {
+func encodeJSONSegment(value any) (string, error) {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return "", err
@@ -93,7 +97,7 @@ func encodeJSONSegment(value interface{}) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(data), nil
 }
 
-func decodeJSONSegment(segment string, value interface{}) error {
+func decodeJSONSegment(segment string, value any) error {
 	data, err := base64.RawURLEncoding.DecodeString(segment)
 	if err != nil {
 		return err

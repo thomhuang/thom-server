@@ -3,13 +3,21 @@ package response
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"runtime/debug"
 )
 
+const maxJSONBodySize = 1 << 20
+
 type Responder struct {
 	ErrorLog *log.Logger
+}
+
+func (r Responder) DecodeJSON(w http.ResponseWriter, body io.ReadCloser, dst any) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, body, maxJSONBodySize))
+	return decoder.Decode(dst)
 }
 
 func (r Responder) WriteJSON(w http.ResponseWriter, status int, data any, headers http.Header) error {

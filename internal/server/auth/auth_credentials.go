@@ -11,11 +11,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-func (app *Handler) authConfigured() bool {
-	return app.config.AdminUsername != "" &&
-		app.config.AdminPasswordHash != "" &&
-		isValidPasswordHash(app.config.AdminPasswordHash) &&
-		app.config.JWTSecret != ""
+func (h *Handler) authConfigured() bool {
+	return h.config.AdminUsername != "" &&
+		h.config.AdminPasswordHash != "" &&
+		isValidPasswordHash(h.config.AdminPasswordHash) &&
+		h.config.JWTSecret != ""
 }
 
 func isValidPasswordHash(hash string) bool {
@@ -23,13 +23,13 @@ func isValidPasswordHash(hash string) bool {
 	return err == nil
 }
 
-func (app *Handler) validLoginCredentials(request loginRequest) bool {
+func (h *Handler) validLoginCredentials(request loginRequest) bool {
 	usernameMatches := subtle.ConstantTimeCompare(
 		[]byte(request.Username),
-		[]byte(app.config.AdminUsername),
+		[]byte(h.config.AdminUsername),
 	) == 1
 	passwordMatches := bcrypt.CompareHashAndPassword(
-		[]byte(app.config.AdminPasswordHash),
+		[]byte(h.config.AdminPasswordHash),
 		[]byte(request.Password),
 	) == nil
 
@@ -37,15 +37,21 @@ func (app *Handler) validLoginCredentials(request loginRequest) bool {
 }
 
 func loginThrottleKey(r *http.Request, username string) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil || host == "" {
-		host = r.RemoteAddr
+	// Behind Fly.io's proxy the real client IP arrives in this header;
+	// RemoteAddr would be the proxy's address.
+	host := strings.TrimSpace(r.Header.Get("Fly-Client-IP"))
+	if host == "" {
+		if remoteHost, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && remoteHost != "" {
+			host = remoteHost
+		} else {
+			host = r.RemoteAddr
+		}
 	}
 
-	return strings.ToLower(strings.TrimSpace(host)) + "|" + strings.ToLower(strings.TrimSpace(username))
+	return strings.ToLower(host) + "|" + strings.ToLower(strings.TrimSpace(username))
 }
 
-func (app *Handler) setRetryAfter(w http.ResponseWriter, lockedUntil time.Time) {
+func (h *Handler) setRetryAfter(w http.ResponseWriter, lockedUntil time.Time) {
 	retryAfter := int(time.Until(lockedUntil).Seconds())
 	if retryAfter < 1 {
 		retryAfter = 1
