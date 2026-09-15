@@ -37,9 +37,9 @@ func (h *Handler) validLoginCredentials(request loginRequest) bool {
 }
 
 func loginThrottleKey(r *http.Request, username string) string {
-	// Behind Fly.io's proxy the real client IP arrives in this header;
-	// RemoteAddr would be the proxy's address.
-	host := strings.TrimSpace(r.Header.Get("Fly-Client-IP"))
+	// Cloudflare sets CF-Connecting-IP; RemoteAddr would be the proxy's
+	// address.
+	host := strings.TrimSpace(r.Header.Get("CF-Connecting-IP"))
 	if host == "" {
 		if remoteHost, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && remoteHost != "" {
 			host = remoteHost

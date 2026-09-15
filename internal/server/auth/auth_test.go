@@ -76,7 +76,7 @@ func TestLoginThrottleKey(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 
-	r.Header.Set("Fly-Client-IP", "203.0.113.7")
+	r.Header.Set("CF-Connecting-IP", "203.0.113.7")
 	if got, want := loginThrottleKey(r, "Admin"), "203.0.113.7|admin"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

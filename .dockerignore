@@ -4,3 +4,10 @@ Dockerfile
 README.md
 .gitignore
 .env*
+.dev.vars
+node_modules
+.wrangler
+worker
+wrangler.jsonc
+package.json
+package-lock.json

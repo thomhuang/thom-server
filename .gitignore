@@ -1,3 +1,6 @@
 .idea/
 .env.*
+.dev.vars
 server.exe
+node_modules/
+.wrangler/

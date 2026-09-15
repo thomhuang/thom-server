@@ -1,12 +1,11 @@
+# Copy to .dev.vars for local `wrangler dev` (requires Docker running).
+# These are passed to the Go container as environment variables.
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD_HASH=$2y$12$replace-with-a-bcrypt-password-hash
 JWT_SECRET=replace-with-a-long-random-secret
 CLIENT_ORIGIN_URLS=http://localhost:3000,http://localhost:3001
 SECURE_COOKIES=false
-DB_PATH=./internal/thom.db
-
-# Cloudflare D1 (used when all three of these are set; local runs use DB_PATH).
 D1_ACCOUNT_ID=
 D1_DATABASE_ID=
-CF_API_TOKEN=
 D1_ENDPOINT=
+CF_API_TOKEN=

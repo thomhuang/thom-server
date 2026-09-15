@@ -30,11 +30,13 @@ func main() {
 
 	flag.Parse()
 
-	if err := server.PrepareDBFile(*dbPath, server.DefaultDBPath); err != nil {
-		errorLog.Fatal(err)
+	if !server.UsingD1() {
+		if err := server.PrepareDBFile(*dbPath, server.DefaultDBPath); err != nil {
+			errorLog.Fatal(err)
+		}
 	}
 
-	appDB, err := server.OpenDB(*dbPath)
+	appDB, err := server.OpenAppDB(*dbPath)
 	if err != nil {
 		errorLog.Fatal(err)
 	}

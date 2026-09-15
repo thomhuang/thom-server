@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "thom-server",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-09-15",
+  "observability": {
+    "enabled": true
+  },
+  "containers": [
+    {
+      "class_name": "ThomServer",
+      "image": "./Dockerfile",
+      "instance_type": "basic",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "THOM_SERVER",
+        "class_name": "ThomServer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ThomServer"]
+    }
+  ],
+  "vars": {
+    "CLIENT_ORIGIN_URLS": "https://thom-website.YOUR-SUBDOMAIN.workers.dev",
+    "SECURE_COOKIES": "true",
+    "D1_ACCOUNT_ID": "YOUR_CLOUDFLARE_ACCOUNT_ID",
+    "D1_DATABASE_ID": "YOUR_D1_DATABASE_ID",
+    "D1_ENDPOINT": ""
+  }
+}

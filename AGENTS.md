@@ -64,19 +64,19 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## Project Structure & Module Organization
 
-This is a small Go 1.22 HTTP API server. The executable entrypoint lives in `cmd/server/main.go`; HTTP app wiring lives in `internal/server`. Shared server infrastructure is in `internal/server` and `internal/server/response`, auth HTTP behavior is in `internal/server/auth`, and coffee HTTP handlers are in `internal/server/coffee`. Domain and data-access code lives in `internal/coffee`, with shared data-layer errors in `internal/data`. The SQLite database used by local runs is `internal/thom.db`; treat it as application data, not a test fixture. Root-level deployment files include `Dockerfile`, `docker-compose.yaml`, `fly.toml`, and the Fly.io GitHub Actions workflow in `.github/workflows/fly-deploy.yml`.
+This is a small Go 1.22 HTTP API server. The executable entrypoint lives in `cmd/server/main.go`; HTTP app wiring lives in `internal/server`. Shared server infrastructure is in `internal/server` and `internal/server/response`, auth HTTP behavior is in `internal/server/auth`, and coffee HTTP handlers are in `internal/server/coffee`. Domain and data-access code lives in `internal/coffee`, with shared data-layer errors in `internal/data` and the Cloudflare D1 `database/sql` driver in `internal/d1`. Local runs use the SQLite database at `internal/thom.db`; treat it as application data, not a test fixture. Production runs the same binary as a Cloudflare Container (`Dockerfile`) fronted by `worker/index.js` and `wrangler.jsonc`, with Cloudflare D1 as the database; see `CLOUDFLARE.md`.
 
 ## Build, Test, and Development Commands
 
-- `go run ./cmd/server`: start the API locally on `:4000`.
+- `go run ./cmd/server`: start the API locally on `:4000` against SQLite.
 - `go run ./cmd/server -addr=":8080"`: run on a different port.
 - `go run ./cmd/server -db-path="./internal/thom.db"`: run against a specific SQLite database.
 - `go test ./...`: run all Go tests.
+- `go test ./internal/d1/`: run the D1 driver tests only (no CGO required).
 - `go build ./cmd/server`: compile the server package.
-- `docker compose up --build`: build and run the containerized service on port `4000`.
-- `flyctl deploy --remote-only`: deploy using the same command as CI.
+- `npx wrangler deploy`: build and deploy the Cloudflare Container and Worker (see `CLOUDFLARE.md`).
 
-For local authenticated routes, copy `.env.example` to `.env.local` and replace the placeholder auth values. `go run ./cmd/server` loads `.env.local` before reading configuration, while existing shell or container variables take precedence. Because `github.com/mattn/go-sqlite3` is used, builds need CGO support unless the build is changed to use a pure-Go SQLite driver.
+For local authenticated routes, copy `.env.example` to `.env.local` and replace the placeholder auth values. `go run ./cmd/server` loads `.env.local` before reading configuration, while existing shell or container variables take precedence. The server uses Cloudflare D1 when `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, and `CF_API_TOKEN` are set, and the local SQLite file otherwise. Because `github.com/mattn/go-sqlite3` is still used for local runs and tests, builds need CGO support; the D1 path itself does not.
 
 ## Coding Style & Naming Conventions
 
@@ -84,14 +84,14 @@ Use standard Go formatting: run `gofmt` on changed `.go` files before committing
 
 ## Testing Guidelines
 
-Place tests next to the code they cover using Go's standard `testing` package and name files `*_test.go`. Prefer table-driven tests for handlers, auth/config helpers, and model methods. For database behavior, use temporary SQLite databases and the existing test helper patterns instead of mutating `internal/thom.db`. Run `go test ./...` before opening a PR.
+Place tests next to the code they cover using Go's standard `testing` package and name files `*_test.go`. Prefer table-driven tests for handlers, auth/config helpers, and model methods. For database behavior, use temporary SQLite databases and the existing test helper patterns instead of mutating `internal/thom.db`; the D1 driver tests use a fake HTTP endpoint and need no CGO. Run `go test ./...` before opening a PR.
 
 ## Commit & Pull Request Guidelines
 
-Recent commits use short, lowercase, imperative summaries, for example `docker + fly.io deployment` and `update routes, data base, and overall qol`. Keep commits focused and mention the affected area when helpful.
+Recent commits use short, lowercase, imperative summaries, for example `add logging, fix db schema, add logging, and cleanups` and `update routes, data base, and overall qol`. Keep commits focused and mention the affected area when helpful.
 
 Pull requests should include a brief description, the routes or models changed, how the change was tested, and any deployment/configuration impact. For API behavior changes, include an example request such as `curl localhost:4000/coffee` and summarize the expected response shape. Mention auth impact when changing protected routes, cookie behavior, or CORS origins.
 
 ## Security & Configuration Tips
 
-Do not commit secrets, real `.env.local` values, JWT secrets, or production password hashes. Fly deployments require `FLY_API_TOKEN` in GitHub Actions secrets. Auth configuration uses `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, `JWT_SECRET`, `CLIENT_ORIGIN_URLS`, and `SECURE_COOKIES`; keep `.env.example` placeholder-only. Set `SECURE_COOKIES=true` for HTTPS environments that need cross-site cookies (this also switches the auth cookie to the `__Host-` prefixed name). Login rate limiting and logout token revocation are in-memory only and reset on process restart — acceptable for the single-machine deployment. Treat `internal/thom.db` as application data: review schema/data changes carefully and avoid accidental local-only mutations.
+Do not commit secrets, real `.env.local`/`.dev.vars` values, JWT secrets, or production password hashes. Cloudflare deployments use Worker secrets (`ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, `JWT_SECRET`, `CF_API_TOKEN`) and vars (`CLIENT_ORIGIN_URLS`, `SECURE_COOKIES`, `D1_ACCOUNT_ID`, `D1_DATABASE_ID`); keep `.env.example` and `.dev.vars.example` placeholder-only. `CF_API_TOKEN` is a D1 API token scoped to the account and must never be committed. Set `SECURE_COOKIES=true` for HTTPS environments (this also switches the auth cookie to the `__Host-` prefixed name). Login rate limiting and logout token revocation are in-memory only and reset when the container restarts or sleeps — acceptable for this single-instance deployment. Treat `internal/thom.db` as application data: review schema/data changes carefully and avoid accidental local-only mutations.

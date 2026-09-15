@@ -38,3 +38,8 @@ func New(errorLog, infoLog *log.Logger, coffeeModel *coffeedata.Model, config Co
 func (app *App) Handler() http.Handler {
 	return app.commonMiddleware(app.routes())
 }
+
+// ping is used by the Cloudflare Containers health check.
+func (app *App) ping(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}

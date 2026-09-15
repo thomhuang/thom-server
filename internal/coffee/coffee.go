@@ -201,11 +201,11 @@ func (m *Model) GetRoasters() ([]*Roaster, error) {
 }
 
 func (m *Model) UpsertRoaster(roaster *Roaster) (*Roaster, error) {
-	return m.upsertRoaster(m.DB, roaster)
+	return m.upsertRoaster(roaster)
 }
 
-func (m *Model) upsertRoaster(q querier, roaster *Roaster) (*Roaster, error) {
-	existingRoaster, err := getRoasterByName(q, roaster.Roaster)
+func (m *Model) upsertRoaster(roaster *Roaster) (*Roaster, error) {
+	existingRoaster, err := getRoasterByName(m.DB, roaster.Roaster)
 	if err == nil {
 		return existingRoaster, nil
 	}
@@ -213,7 +213,7 @@ func (m *Model) upsertRoaster(q querier, roaster *Roaster) (*Roaster, error) {
 		return nil, err
 	}
 
-	existingRoaster, err = getRoasterByID(q, roaster.ID)
+	existingRoaster, err = getRoasterByID(m.DB, roaster.ID)
 	if err == nil {
 		return existingRoaster, nil
 	}
@@ -225,11 +225,11 @@ func (m *Model) upsertRoaster(q querier, roaster *Roaster) (*Roaster, error) {
 		INSERT INTO CoffeeRoasters (id, Roaster)
 		VALUES (?, ?)`
 
-	if _, err = q.Exec(stmt, roaster.ID, roaster.Roaster); err != nil {
+	if _, err = m.DB.Exec(stmt, roaster.ID, roaster.Roaster); err != nil {
 		return nil, err
 	}
 
-	return getRoasterByID(q, roaster.ID)
+	return getRoasterByID(m.DB, roaster.ID)
 }
 
 func (m *Model) GetRoasterByName(name string) (*Roaster, error) {
@@ -341,13 +341,7 @@ func (m *Model) GetByID(id int) (*Entry, error) {
 }
 
 func (m *Model) Insert(entry *Entry) (*Entry, error) {
-	tx, err := m.DB.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
-	roaster, err := m.upsertRoaster(tx, &Roaster{ID: entry.RoasterID, Roaster: entry.Roaster})
+	roaster, err := m.upsertRoaster(&Roaster{ID: entry.RoasterID, Roaster: entry.Roaster})
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +357,7 @@ func (m *Model) Insert(entry *Entry) (*Entry, error) {
 		)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	result, err := tx.Exec(
+	result, err := m.DB.Exec(
 		stmt,
 		entry.Date,
 		entry.CoffeeName,
@@ -397,21 +391,11 @@ func (m *Model) Insert(entry *Entry) (*Entry, error) {
 		return nil, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-
 	return m.GetByID(int(id))
 }
 
 func (m *Model) Update(id int, entry *Entry) (*Entry, error) {
-	tx, err := m.DB.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
-	roaster, err := m.upsertRoaster(tx, &Roaster{ID: entry.RoasterID, Roaster: entry.Roaster})
+	roaster, err := m.upsertRoaster(&Roaster{ID: entry.RoasterID, Roaster: entry.Roaster})
 	if err != nil {
 		return nil, err
 	}
@@ -444,7 +428,7 @@ func (m *Model) Update(id int, entry *Entry) (*Entry, error) {
 			Rating = ?
 		WHERE id = ?`
 
-	result, err := tx.Exec(
+	result, err := m.DB.Exec(
 		stmt,
 		entry.Date,
 		entry.CoffeeName,
@@ -480,10 +464,6 @@ func (m *Model) Update(id int, entry *Entry) (*Entry, error) {
 	}
 	if rowsAffected == 0 {
 		return nil, data.ErrNoRecord
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
 	}
 
 	return m.GetByID(id)

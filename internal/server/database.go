@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"thom-server/internal/d1"
 )
 
 const DefaultDBPath = "./internal/thom.db"
@@ -72,6 +74,50 @@ func samePath(a, b string) bool {
 	absA, errA := filepath.Abs(a)
 	absB, errB := filepath.Abs(b)
 	return errA == nil && errB == nil && absA == absB
+}
+
+// D1ConfigFromEnv reports the Cloudflare D1 settings when every required
+// variable is present. Deployments that set these use D1 instead of SQLite.
+func D1ConfigFromEnv() (d1.Config, bool) {
+	accountID := strings.TrimSpace(os.Getenv("D1_ACCOUNT_ID"))
+	databaseID := strings.TrimSpace(os.Getenv("D1_DATABASE_ID"))
+	apiToken := strings.TrimSpace(os.Getenv("CF_API_TOKEN"))
+	if accountID == "" || databaseID == "" || apiToken == "" {
+		return d1.Config{}, false
+	}
+
+	return d1.Config{
+		AccountID:  accountID,
+		DatabaseID: databaseID,
+		APIToken:   apiToken,
+		Endpoint:   strings.TrimSpace(os.Getenv("D1_ENDPOINT")),
+	}, true
+}
+
+// UsingD1 reports whether the server should talk to Cloudflare D1.
+func UsingD1() bool {
+	_, ok := D1ConfigFromEnv()
+	return ok
+}
+
+// OpenAppDB opens Cloudflare D1 when it is configured, otherwise the local
+// SQLite file used for development and tests.
+func OpenAppDB(dbPath string) (*sql.DB, error) {
+	if cfg, ok := D1ConfigFromEnv(); ok {
+		return openD1(cfg)
+	}
+
+	return OpenDB(dbPath)
+}
+
+func openD1(cfg d1.Config) (*sql.DB, error) {
+	db := sql.OpenDB(d1.NewConnector(cfg))
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	return db, nil
 }
 
 func OpenDB(dbPath string) (*sql.DB, error) {
