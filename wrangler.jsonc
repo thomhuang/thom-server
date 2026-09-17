@@ -29,10 +29,10 @@
     }
   ],
   "vars": {
-    "CLIENT_ORIGIN_URLS": "https://thom-website.YOUR-SUBDOMAIN.workers.dev",
+    "CLIENT_ORIGIN_URLS": "https://thom-website.thomhuang.workers.dev",
     "SECURE_COOKIES": "true",
-    "D1_ACCOUNT_ID": "YOUR_CLOUDFLARE_ACCOUNT_ID",
-    "D1_DATABASE_ID": "YOUR_D1_DATABASE_ID",
+    "D1_ACCOUNT_ID": "d267f5667d69d024b78f3435e213c77d",
+    "D1_DATABASE_ID": "d9ebb328-8e11-474f-b3c8-fe2660bd9c8c",
     "D1_ENDPOINT": ""
   }
 }
