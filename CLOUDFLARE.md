@@ -49,11 +49,15 @@ npx wrangler secret put ADMIN_PASSWORD_HASH   # bcrypt hash, see README
 npx wrangler secret put JWT_SECRET
 ```
 
-Generate a bcrypt hash with:
+Generate a bcrypt hash with the helper in this repository (it uses the same
+`golang.org/x/crypto/bcrypt` version and cost the server verifies against):
 
 ```sh
-htpasswd -bnBC 12 "" "your-password" | tr -d ':\n'
+echo "your-password" | go run ./tools/bcryptgen
 ```
+
+`htpasswd -bnBC 12 "" "your-password"` also works if you have it installed;
+the server accepts `$2a$`, `$2b$`, and `$2y$` hashes.
 
 ## 4. Point CORS at the website
 
@@ -94,6 +98,51 @@ npx wrangler d1 execute thom-db --remote --file=thom-data.sql
 
 `CoffeeRoasters` is also seeded from `CoffeeEntries` on startup, so roasters you did
 not import explicitly are recreated.
+
+## Rotating the admin password
+
+The login credentials live in two Worker secrets: `ADMIN_USERNAME` and
+`ADMIN_PASSWORD_HASH`. Only the bcrypt hash is stored; the plaintext password
+never reaches Cloudflare.
+
+To change the password:
+
+```sh
+cd thom-server
+
+# 1. Hash the new password. -AsSecureString keeps it off the screen and out of
+#    your shell history.
+$sec = Read-Host -Prompt "New admin password" -AsSecureString
+$pw  = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+          [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+
+# 2. Store the hash as a Worker secret.
+$pw | go run ./tools/bcryptgen | npx wrangler secret put ADMIN_PASSWORD_HASH
+
+# 3. Clear the variable when you are done.
+Remove-Variable pw, sec
+```
+
+The new hash takes effect on the next request that spins up the container; no
+redeploy is needed. Existing sessions are **not** invalidated, because they are
+signed with `JWT_SECRET` rather than derived from the password. If you want to
+force everyone out, rotate `JWT_SECRET` as well:
+
+```sh
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))" |
+  npx wrangler secret put JWT_SECRET
+```
+
+That invalidates every issued token, so you will need to sign in again.
+
+`ADMIN_USERNAME` can be changed the same way, without hashing:
+
+```sh
+npx wrangler secret put ADMIN_USERNAME
+```
+
+For local development, put the same hash in `.env.local` (gitignored) as
+`ADMIN_PASSWORD_HASH`.
 
 ## Notes and trade-offs
 
