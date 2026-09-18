@@ -121,7 +121,7 @@ func openD1(cfg d1.Config) (*sql.DB, error) {
 }
 
 func OpenDB(dbPath string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
 	}

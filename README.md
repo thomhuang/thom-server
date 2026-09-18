@@ -38,8 +38,8 @@ The server defaults to the SQLite database at `internal/thom.db`. Use `DB_PATH` 
 shell or container environment variables take precedence.
 
 ```sh
-go test ./...           # all tests (SQLite; needs CGO)
-go test ./internal/d1/  # D1 driver tests only (no CGO)
+go test ./...           # all tests (local SQLite, no C toolchain needed)
+go test ./internal/d1/  # D1 driver tests only
 go build ./cmd/server
 ```
 

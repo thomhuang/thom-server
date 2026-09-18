@@ -42,6 +42,7 @@ type coffeeEntryPatch struct {
 	BrewMethod       *string  `json:"brewMethod"`
 	Ratio            *string  `json:"ratio"`
 	Grinder          *string  `json:"grinder"`
+	GrinderID        *string  `json:"grinderId"`
 	GrindSetting     *float64 `json:"grindSetting"`
 	Dose             *int     `json:"dose"`
 	YieldAmount      *int     `json:"yieldAmount"`
@@ -128,6 +129,48 @@ func (h *Handler) CreateRoaster(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) GetGrinders(w http.ResponseWriter, r *http.Request) {
+	grinders, err := h.coffee.GetGrinders()
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+
+	if err = h.responder.WriteJSON(w, http.StatusOK, grinders, nil); err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+}
+
+func (h *Handler) CreateGrinder(w http.ResponseWriter, r *http.Request) {
+	var grinder coffeedata.Grinder
+	if err := h.responder.DecodeJSON(w, r.Body, &grinder); err != nil {
+		h.infoLog.Printf("failed to decode grinder JSON: %v", err)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	normalizeCoffeeGrinder(&grinder)
+	if err := isValidCoffeeGrinder(&grinder); err != nil {
+		h.infoLog.Printf("invalid grinder: %v", err)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	createdGrinder, err := h.coffee.UpsertGrinder(&grinder)
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+
+	h.infoLog.Printf("CREATE_GRINDER id=%s name=%s", createdGrinder.ID, createdGrinder.Grinder)
+
+	if err = h.responder.WriteJSON(w, http.StatusCreated, createdGrinder, nil); err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+}
+
 func (h *Handler) CreateEntry(w http.ResponseWriter, r *http.Request) {
 	var entry coffeedata.Entry
 	if err := h.responder.DecodeJSON(w, r.Body, &entry); err != nil {
@@ -170,6 +213,10 @@ func (h *Handler) UpdateEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if (patch.RoasterID == nil) != (patch.Roaster == nil) {
+		h.responder.BadRequest(w)
+		return
+	}
+	if (patch.GrinderID == nil) != (patch.Grinder == nil) {
 		h.responder.BadRequest(w)
 		return
 	}
@@ -236,6 +283,7 @@ func normalizeCoffeeEntry(entry *coffeedata.Entry) {
 	entry.Roaster = strings.TrimSpace(entry.Roaster)
 	entry.BrewMethod = strings.TrimSpace(entry.BrewMethod)
 	entry.Ratio = strings.TrimSpace(entry.Ratio)
+	entry.GrinderID = strings.TrimSpace(entry.GrinderID)
 	entry.Grinder = strings.TrimSpace(entry.Grinder)
 	entry.BrewTime = strings.TrimSpace(entry.BrewTime)
 	entry.BloomTime = strings.TrimSpace(entry.BloomTime)
@@ -250,7 +298,10 @@ func normalizeCoffeeEntry(entry *coffeedata.Entry) {
 	entry.TastingNotes = entry.Notes
 
 	if entry.RoasterID == "" && entry.Roaster != "" {
-		entry.RoasterID = slugifyCoffeeValue(entry.Roaster)
+		entry.RoasterID = coffeedata.SlugifyName(entry.Roaster)
+	}
+	if entry.GrinderID == "" && entry.Grinder != "" {
+		entry.GrinderID = coffeedata.SlugifyName(entry.Grinder)
 	}
 }
 
@@ -259,7 +310,16 @@ func normalizeCoffeeRoaster(roaster *coffeedata.Roaster) {
 	roaster.Roaster = strings.TrimSpace(roaster.Roaster)
 
 	if roaster.ID == "" && roaster.Roaster != "" {
-		roaster.ID = slugifyCoffeeValue(roaster.Roaster)
+		roaster.ID = coffeedata.SlugifyName(roaster.Roaster)
+	}
+}
+
+func normalizeCoffeeGrinder(grinder *coffeedata.Grinder) {
+	grinder.ID = strings.TrimSpace(grinder.ID)
+	grinder.Grinder = strings.TrimSpace(grinder.Grinder)
+
+	if grinder.ID == "" && grinder.Grinder != "" {
+		grinder.ID = coffeedata.SlugifyName(grinder.Grinder)
 	}
 }
 
@@ -299,6 +359,12 @@ func applyCoffeeEntryPatch(entry *coffeedata.Entry, patch *coffeeEntryPatch) {
 	}
 	if patch.Grinder != nil {
 		entry.Grinder = *patch.Grinder
+		if patch.GrinderID == nil {
+			entry.GrinderID = ""
+		}
+	}
+	if patch.GrinderID != nil {
+		entry.GrinderID = *patch.GrinderID
 	}
 	if patch.GrindSetting != nil {
 		entry.GrindSetting = *patch.GrindSetting
@@ -349,6 +415,7 @@ func isValidCoffeeEntry(entry *coffeedata.Entry) error {
 		{"roaster", entry.Roaster},
 		{"brewMethod", entry.BrewMethod},
 		{"ratio", entry.Ratio},
+		{"grinderId", entry.GrinderID},
 		{"grinder", entry.Grinder},
 		{"notes", entry.Notes},
 	}
@@ -387,22 +454,12 @@ func isValidCoffeeRoaster(roaster *coffeedata.Roaster) error {
 	return nil
 }
 
-func slugifyCoffeeValue(value string) string {
-	var builder strings.Builder
-	lastWasDash := false
-
-	for _, r := range strings.ToLower(value) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			builder.WriteRune(r)
-			lastWasDash = false
-			continue
-		}
-
-		if builder.Len() > 0 && !lastWasDash {
-			builder.WriteByte('-')
-			lastWasDash = true
-		}
+func isValidCoffeeGrinder(grinder *coffeedata.Grinder) error {
+	if grinder.ID == "" {
+		return fmt.Errorf("grinder id is required")
 	}
-
-	return strings.Trim(builder.String(), "-")
+	if grinder.Grinder == "" {
+		return fmt.Errorf("grinder name is required")
+	}
+	return nil
 }

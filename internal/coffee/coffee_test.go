@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 
 	"thom-server/internal/data"
 )
@@ -73,7 +73,7 @@ func TestModelGetByIDNoRecord(t *testing.T) {
 }
 
 func TestModelEnsureSchemaAddsCoffeeMetadataColumns(t *testing.T) {
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestModelEnsureSchemaAddsCoffeeMetadataColumns(t *testing.T) {
 }
 
 func TestModelEnsureSchemaHandlesSeedRoasterNameConflicts(t *testing.T) {
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,6 +272,133 @@ func TestModelUpsertRoasterReturnsExistingIDConflict(t *testing.T) {
 	}
 	if roaster.Roaster != "Shoebox" {
 		t.Fatalf("expected stored roaster name to remain Shoebox, got %q", roaster.Roaster)
+	}
+}
+
+func TestModelGetGrinders(t *testing.T) {
+	model := newTestModel(t)
+
+	grinders, err := model.GetGrinders()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(grinders) != 1 {
+		t.Fatalf("expected 1 seeded grinder, got %d", len(grinders))
+	}
+	if grinders[0].ID != "fellow-ode" {
+		t.Fatalf("expected first grinder fellow-ode, got %q", grinders[0].ID)
+	}
+}
+
+func TestModelUpsertGrinder(t *testing.T) {
+	model := newTestModel(t)
+
+	grinder, err := model.UpsertGrinder(&Grinder{ID: "df64", Grinder: "DF64V mk. II with SSP MP Burrs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if grinder.ID != "df64" {
+		t.Fatalf("expected grinder ID df64, got %q", grinder.ID)
+	}
+	if grinder.CreatedAt == "" {
+		t.Fatal("expected created timestamp")
+	}
+}
+
+func TestModelUpsertGrinderDerivesIDFromName(t *testing.T) {
+	model := newTestModel(t)
+
+	grinder, err := model.UpsertGrinder(&Grinder{Grinder: "1zpresso K-Ultra"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if grinder.ID != "1zpresso-k-ultra" {
+		t.Fatalf("expected derived grinder ID 1zpresso-k-ultra, got %q", grinder.ID)
+	}
+}
+
+func TestModelUpsertGrinderReturnsExistingNameConflict(t *testing.T) {
+	model := newTestModel(t)
+
+	grinder, err := model.UpsertGrinder(&Grinder{ID: "other", Grinder: "Fellow Ode"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if grinder.ID != "fellow-ode" {
+		t.Fatalf("expected existing grinder ID fellow-ode, got %q", grinder.ID)
+	}
+}
+
+func TestModelEnsureSchemaBackfillsGrinders(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	db.SetMaxOpenConns(1)
+
+	schema := `
+		CREATE TABLE CoffeeEntries (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			BrewDate TEXT NOT NULL,
+			CoffeeName TEXT NOT NULL,
+			DaysSinceRoast INTEGER NOT NULL DEFAULT 0,
+			RoasterID TEXT NOT NULL,
+			Roaster TEXT NOT NULL,
+			BrewMethod TEXT NOT NULL,
+			Ratio TEXT NOT NULL,
+			Grinder TEXT NOT NULL,
+			GrindSetting REAL NOT NULL DEFAULT 0.0,
+			Dose INTEGER NOT NULL DEFAULT 0,
+			YieldAmount INTEGER NOT NULL DEFAULT 0,
+			WaterTemperature INTEGER NOT NULL DEFAULT 0,
+			BrewTime TEXT NOT NULL DEFAULT '',
+			BloomTime TEXT NOT NULL DEFAULT '',
+			BloomWater INTEGER NOT NULL DEFAULT 0,
+			PourNotes TEXT NOT NULL DEFAULT '',
+			RoastLevel TEXT NOT NULL DEFAULT '',
+			Notes TEXT NOT NULL,
+			Rating INTEGER NOT NULL DEFAULT 0,
+			CreatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+		INSERT INTO CoffeeEntries (
+			BrewDate, CoffeeName, RoasterID, Roaster, BrewMethod, Ratio, Grinder, Notes
+		)
+		VALUES (
+			'2026-05-21', 'Legacy Kenya Lot', 'shoebox', 'Shoebox',
+			'v60', '1:16', 'fellow-ode', 'blackcurrant'
+		);`
+	if _, err = db.Exec(schema); err != nil {
+		t.Fatal(err)
+	}
+
+	model := &Model{DB: db}
+	if err = model.EnsureSchema(); err != nil {
+		t.Fatal(err)
+	}
+
+	grinder, err := model.GetGrinderByID("fellow-ode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grinder.Grinder != "fellow-ode" {
+		t.Fatalf("expected backfilled grinder name, got %q", grinder.Grinder)
+	}
+
+	entry, err := model.GetByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.GrinderID != "fellow-ode" {
+		t.Fatalf("expected backfilled GrinderID fellow-ode, got %q", entry.GrinderID)
 	}
 }
 
@@ -427,7 +554,7 @@ func TestModelDeleteNoRecord(t *testing.T) {
 func newTestModel(t *testing.T) *Model {
 	t.Helper()
 
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,18 +577,21 @@ func newTestModel(t *testing.T) *Model {
 	if _, err = db.Exec(`INSERT OR IGNORE INTO CoffeeRoasters (id, Roaster, SortOrder) VALUES ('shoebox', 'Shoebox', 10)`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.Exec(`INSERT OR IGNORE INTO CoffeeGrinders (id, Grinder, SortOrder) VALUES ('fellow-ode', 'Fellow Ode', 20)`); err != nil {
+		t.Fatal(err)
+	}
 
 	fixture := `
 		INSERT INTO CoffeeEntries (
 			id, BrewDate, CoffeeName, Origin, CoffeeVarietal, ProcessingMethod,
-			DaysSinceRoast, RoasterID, Roaster, BrewMethod, Ratio, Grinder,
+			DaysSinceRoast, RoasterID, Roaster, BrewMethod, Ratio, GrinderID, Grinder,
 			GrindSetting, Dose, YieldAmount, WaterTemperature, BrewTime,
 			BloomTime, BloomWater, PourNotes, RoastLevel, Notes, Rating, CreatedAt
 		)
 		VALUES (
 			1, '2026-05-20', 'Ethiopia Test Lot', 'Yirgacheffe, Ethiopia',
 			'Heirloom', 'Washed', 10, 'shoebox', 'Shoebox',
-			'v60', '1:16', 'fellow-ode', 4.2, 20, 320, 203,
+			'v60', '1:16', 'fellow-ode', 'fellow-ode', 4.2, 20, 320, 203,
 			'3:20', '45s', 50, 'Two-pour finish', 'light',
 			'floral, citrus, honey', 5, '2026-05-20 12:00:00'
 		);`

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"thom-server/internal/r2"
 	"thom-server/internal/server/auth"
 )
 
@@ -17,6 +18,19 @@ type Config struct {
 	JWTSecret         string
 	ClientOrigins     []string
 	SecureCookies     bool
+	R2                r2.Config
+	R2PublicBaseURL   string
+	Stripe            StripeConfig
+}
+
+// StripeConfig holds the Checkout and webhook settings.
+type StripeConfig struct {
+	SecretKey     string
+	WebhookSecret string
+	TaxEnabled    bool
+	ShippingCents int
+	SuccessURL    string
+	CancelURL     string
 }
 
 func (c Config) authConfig() auth.Config {
@@ -51,6 +65,46 @@ func ClientOriginsFromEnv() []string {
 
 func SecureCookiesFromEnv() bool {
 	return strings.EqualFold(os.Getenv("SECURE_COOKIES"), "true")
+}
+
+// R2ConfigFromEnv reads the credentials used to sign uploads and deletes.
+// R2_ENDPOINT is only set by tests, mirroring D1_ENDPOINT.
+func R2ConfigFromEnv() r2.Config {
+	return r2.Config{
+		AccountID:       strings.TrimSpace(os.Getenv("R2_ACCOUNT_ID")),
+		Bucket:          strings.TrimSpace(os.Getenv("R2_BUCKET")),
+		AccessKeyID:     strings.TrimSpace(os.Getenv("R2_ACCESS_KEY_ID")),
+		SecretAccessKey: strings.TrimSpace(os.Getenv("R2_SECRET_ACCESS_KEY")),
+		Endpoint:        strings.TrimSpace(os.Getenv("R2_ENDPOINT")),
+	}
+}
+
+// R2PublicBaseURLFromEnv is the public delivery host images are served from,
+// such as a bucket's r2.dev URL or a custom domain.
+func R2PublicBaseURLFromEnv() string {
+	return strings.TrimSpace(os.Getenv("R2_PUBLIC_BASE_URL"))
+}
+
+// StripeConfigFromEnv reads the Checkout settings. Success and cancel URLs are
+// derived from the first client origin so the browser returns to the website
+// rather than the API. Stripe Tax stays off unless explicitly enabled, because
+// enabling it without configured tax registrations makes Checkout fail.
+func StripeConfigFromEnv(clientOrigins []string) StripeConfig {
+	origin := ""
+	if len(clientOrigins) > 0 {
+		origin = strings.TrimSuffix(strings.TrimSpace(clientOrigins[0]), "/")
+	}
+
+	shippingCents, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("STRIPE_SHIPPING_CENTS")))
+
+	return StripeConfig{
+		SecretKey:     strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY")),
+		WebhookSecret: strings.TrimSpace(os.Getenv("STRIPE_WEBHOOK_SECRET")),
+		TaxEnabled:    strings.EqualFold(strings.TrimSpace(os.Getenv("STRIPE_TAX_ENABLED")), "true"),
+		ShippingCents: shippingCents,
+		SuccessURL:    origin + "/shop/order?session_id={CHECKOUT_SESSION_ID}",
+		CancelURL:     origin + "/shop",
+	}
 }
 
 func LoadLocalEnv(path string) error {

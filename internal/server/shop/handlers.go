@@ -1,0 +1,622 @@
+package shop
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	authhttp "thom-server/internal/server/auth"
+	"thom-server/internal/server/response"
+	shopdata "thom-server/internal/shop"
+)
+
+const (
+	maxTitleLength       = 200
+	maxDescriptionLength = 5000
+	presignExpiry        = 10 * time.Minute
+	defaultSortOrder     = shopdata.DefaultImageSortOrder
+	objectKeyPrefix      = "shop"
+)
+
+// allowedImageTypes maps an accepted upload type to the stored file extension.
+// The extension comes from this table rather than the client filename so a
+// crafted name cannot escape the item's key prefix.
+var allowedImageTypes = map[string]string{
+	"image/jpeg": "jpg",
+	"image/png":  "png",
+	"image/webp": "webp",
+	"image/avif": "avif",
+	"image/gif":  "gif",
+}
+
+// ImageStore signs uploads and removes objects. It is an interface so handler
+// tests can run without R2 credentials.
+type ImageStore interface {
+	PresignPut(objectKey, contentType string, expires time.Duration) (string, error)
+	Delete(objectKey string) error
+}
+
+// Handler serves the shop routes.
+type Handler struct {
+	shop           *shopdata.Model
+	images         ImageStore
+	publicURL      string
+	stripe         StripeClient
+	stripeSettings StripeSettings
+	responder      response.Responder
+	infoLog        *log.Logger
+}
+
+func New(model *shopdata.Model, images ImageStore, publicURL string, responder response.Responder, infoLog *log.Logger) *Handler {
+	if infoLog == nil {
+		infoLog = log.New(io.Discard, "", 0)
+	}
+
+	return &Handler{
+		shop:      model,
+		images:    images,
+		publicURL: strings.TrimSuffix(strings.TrimSpace(publicURL), "/"),
+		responder: responder,
+		infoLog:   infoLog,
+	}
+}
+
+type itemRequest struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	BrandID     string `json:"brandId"`
+	Brand       string `json:"brand"`
+	PriceCents  *int   `json:"priceCents"`
+	Currency    string `json:"currency"`
+	Stock       *int   `json:"stock"`
+	IsPublished *bool  `json:"isPublished"`
+}
+
+type itemPatch struct {
+	Title       *string `json:"title"`
+	Description *string `json:"description"`
+	BrandID     *string `json:"brandId"`
+	Brand       *string `json:"brand"`
+	PriceCents  *int    `json:"priceCents"`
+	Currency    *string `json:"currency"`
+	Stock       *int    `json:"stock"`
+	IsPublished *bool   `json:"isPublished"`
+}
+
+type presignRequest struct {
+	ContentType string `json:"contentType"`
+}
+
+type presignResponse struct {
+	ObjectKey string `json:"objectKey"`
+	UploadURL string `json:"uploadUrl"`
+	// ContentType is echoed back because it is part of the signature; the
+	// browser must send exactly this header for the upload to be accepted.
+	ContentType string `json:"contentType"`
+	ExpiresAt   string `json:"expiresAt"`
+}
+
+type imageRequest struct {
+	ObjectKey string `json:"objectKey"`
+	AltText   string `json:"altText"`
+	SortOrder *int   `json:"sortOrder"`
+}
+
+// GetItems lists listings. Anonymous callers see published items only; a valid
+// admin session also sees drafts.
+func (h *Handler) GetItems(w http.ResponseWriter, r *http.Request) {
+	items, err := h.shop.GetItems(authhttp.IsAuthenticated(r))
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+
+	for _, item := range items {
+		item.PrimaryImageURL = h.publicImageURL(item.PrimaryImageKey)
+	}
+
+	if err = h.responder.WriteJSON(w, http.StatusOK, items, nil); err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+}
+
+func (h *Handler) GetItemByID(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.readPositiveIntPath(w, r, "id")
+	if !ok {
+		return
+	}
+
+	item, err := h.shop.GetItemByID(id)
+	if h.responder.HandleDataError(w, err) {
+		return
+	}
+
+	if !item.IsPublished && !authhttp.IsAuthenticated(r) {
+		h.responder.NotFound(w)
+		return
+	}
+
+	h.decorateImages(item)
+
+	if err = h.responder.WriteJSON(w, http.StatusOK, item, nil); err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+}
+
+func (h *Handler) GetBrands(w http.ResponseWriter, r *http.Request) {
+	brands, err := h.shop.GetBrands()
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+
+	if err = h.responder.WriteJSON(w, http.StatusOK, brands, nil); err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+}
+
+func (h *Handler) CreateBrand(w http.ResponseWriter, r *http.Request) {
+	var brand shopdata.Brand
+	if err := h.responder.DecodeJSON(w, r.Body, &brand); err != nil {
+		h.infoLog.Printf("failed to decode brand JSON: %v", err)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	normalizeBrand(&brand)
+	if err := isValidBrand(&brand); err != nil {
+		h.infoLog.Printf("invalid brand: %v", err)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	createdBrand, err := h.shop.UpsertBrand(&brand)
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+
+	h.infoLog.Printf("CREATE_BRAND id=%s name=%s", createdBrand.ID, createdBrand.Brand)
+
+	if err = h.responder.WriteJSON(w, http.StatusCreated, createdBrand, nil); err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+}
+
+func (h *Handler) CreateItem(w http.ResponseWriter, r *http.Request) {
+	var request itemRequest
+	if err := h.responder.DecodeJSON(w, r.Body, &request); err != nil {
+		h.infoLog.Printf("failed to decode shop item JSON: %v", err)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	item := &shopdata.Item{
+		Title:       request.Title,
+		Description: request.Description,
+		BrandID:     request.BrandID,
+		Brand:       request.Brand,
+		Currency:    request.Currency,
+	}
+	if request.PriceCents != nil {
+		item.PriceCents = *request.PriceCents
+	}
+	if request.Stock != nil {
+		item.Stock = *request.Stock
+	}
+	if request.IsPublished != nil {
+		item.IsPublished = *request.IsPublished
+	}
+
+	normalizeItem(item)
+	if err := isValidItem(item); err != nil {
+		h.infoLog.Printf("invalid shop item: %v", err)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	createdItem, err := h.shop.InsertItem(item)
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+
+	h.infoLog.Printf("CREATE_ITEM id=%s title=%s", createdItem.ID, createdItem.Title)
+
+	h.decorateImages(createdItem)
+
+	if err = h.responder.WriteJSON(w, http.StatusCreated, createdItem, nil); err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+}
+
+func (h *Handler) UpdateItem(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.readPositiveIntPath(w, r, "id")
+	if !ok {
+		return
+	}
+
+	var patch itemPatch
+	if err := h.responder.DecodeJSON(w, r.Body, &patch); err != nil {
+		h.infoLog.Printf("failed to decode shop item patch JSON: %v", err)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	item, err := h.shop.GetItemByID(id)
+	if h.responder.HandleDataError(w, err) {
+		return
+	}
+
+	applyItemPatch(item, &patch)
+	normalizeItem(item)
+	if err := isValidItem(item); err != nil {
+		h.infoLog.Printf("invalid shop item: %v", err)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	updatedItem, err := h.shop.UpdateItem(id, item)
+	if h.responder.HandleDataError(w, err) {
+		return
+	}
+
+	h.infoLog.Printf("UPDATE_ITEM id=%d title=%s", id, updatedItem.Title)
+
+	h.decorateImages(updatedItem)
+
+	if err = h.responder.WriteJSON(w, http.StatusOK, updatedItem, nil); err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+}
+
+func (h *Handler) DeleteItem(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.readPositiveIntPath(w, r, "id")
+	if !ok {
+		return
+	}
+
+	images, err := h.shop.DeleteItem(id)
+	if h.responder.HandleDataError(w, err) {
+		return
+	}
+
+	h.infoLog.Printf("DELETE_ITEM id=%d", id)
+
+	// The rows are already gone, so a failed object delete would only strand
+	// cheap orphaned files. Log it and still report success.
+	h.deleteObjects(images)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// PresignImageUpload returns a short-lived URL the browser PUTs an image to, so
+// image bytes never pass through the container.
+func (h *Handler) PresignImageUpload(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.readPositiveIntPath(w, r, "id")
+	if !ok {
+		return
+	}
+
+	var request presignRequest
+	if err := h.responder.DecodeJSON(w, r.Body, &request); err != nil {
+		h.infoLog.Printf("failed to decode presign JSON: %v", err)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	contentType := strings.ToLower(strings.TrimSpace(request.ContentType))
+	extension, allowed := allowedImageTypes[contentType]
+	if !allowed {
+		h.infoLog.Printf("unsupported image content type %q", contentType)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	if _, err := h.shop.GetItemByID(id); h.responder.HandleDataError(w, err) {
+		return
+	}
+
+	imageCount, err := h.shop.CountImages(id)
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+	if imageCount >= shopdata.MaxItemImages {
+		h.infoLog.Printf("item %d already has the maximum number of images", id)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	objectKey, err := newObjectKey(id, extension)
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+
+	uploadURL, err := h.images.PresignPut(objectKey, contentType, presignExpiry)
+	if err != nil {
+		h.infoLog.Printf("failed to presign upload: %v", err)
+		h.responder.ClientError(w, http.StatusServiceUnavailable)
+		return
+	}
+
+	h.infoLog.Printf("PRESIGN_IMAGE item=%d key=%s", id, objectKey)
+
+	err = h.responder.WriteJSON(w, http.StatusOK, presignResponse{
+		ObjectKey:   objectKey,
+		UploadURL:   uploadURL,
+		ContentType: contentType,
+		ExpiresAt:   time.Now().Add(presignExpiry).UTC().Format(time.RFC3339),
+	}, nil)
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+}
+
+// CreateImage records an object that the browser has already uploaded.
+func (h *Handler) CreateImage(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.readPositiveIntPath(w, r, "id")
+	if !ok {
+		return
+	}
+
+	var request imageRequest
+	if err := h.responder.DecodeJSON(w, r.Body, &request); err != nil {
+		h.infoLog.Printf("failed to decode image JSON: %v", err)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	if _, err := h.shop.GetItemByID(id); h.responder.HandleDataError(w, err) {
+		return
+	}
+
+	objectKey := strings.TrimSpace(request.ObjectKey)
+	if !validObjectKey(objectKey, id) {
+		h.infoLog.Printf("rejected image key %q for item %d", objectKey, id)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	image := &shopdata.Image{
+		ObjectKey: objectKey,
+		AltText:   strings.TrimSpace(request.AltText),
+		SortOrder: defaultSortOrder,
+	}
+	if request.SortOrder != nil {
+		image.SortOrder = *request.SortOrder
+	}
+
+	createdImage, err := h.shop.AddImage(id, image)
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+
+	h.infoLog.Printf("CREATE_IMAGE item=%d id=%s", id, createdImage.ID)
+
+	createdImage.URL = h.publicImageURL(createdImage.ObjectKey)
+
+	if err = h.responder.WriteJSON(w, http.StatusCreated, createdImage, nil); err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+}
+
+func (h *Handler) DeleteImage(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.readPositiveIntPath(w, r, "id")
+	if !ok {
+		return
+	}
+
+	imageID, ok := h.readPositiveIntPath(w, r, "imageId")
+	if !ok {
+		return
+	}
+
+	image, err := h.shop.DeleteImage(id, imageID)
+	if h.responder.HandleDataError(w, err) {
+		return
+	}
+
+	h.infoLog.Printf("DELETE_IMAGE item=%d id=%d", id, imageID)
+
+	h.deleteObjects([]*shopdata.Image{image})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteObjects removes uploaded files on a best-effort basis.
+func (h *Handler) deleteObjects(images []*shopdata.Image) {
+	for _, image := range images {
+		if err := h.images.Delete(image.ObjectKey); err != nil {
+			h.infoLog.Printf("failed to delete object %s: %v", image.ObjectKey, err)
+		}
+	}
+}
+
+func (h *Handler) decorateImages(item *shopdata.Item) {
+	for _, image := range item.Images {
+		image.URL = h.publicImageURL(image.ObjectKey)
+	}
+}
+
+func (h *Handler) publicImageURL(objectKey string) string {
+	if objectKey == "" || h.publicURL == "" {
+		return ""
+	}
+
+	return h.publicURL + "/" + objectKey
+}
+
+func (h *Handler) readPositiveIntPath(w http.ResponseWriter, r *http.Request, key string) (int, bool) {
+	value, err := strconv.Atoi(r.PathValue(key))
+	if err != nil || value < 1 {
+		h.responder.BadRequest(w)
+		return 0, false
+	}
+
+	return value, true
+}
+
+// newObjectKey builds shop/{itemID}/{random}.{ext}. The random name prevents
+// collisions and keeps guesses from overwriting existing uploads.
+func newObjectKey(itemID int, extension string) (string, error) {
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%s/%d/%s.%s", objectKeyPrefix, itemID, hex.EncodeToString(random), extension), nil
+}
+
+// validObjectKey accepts only keys this server could have minted for the item.
+func validObjectKey(objectKey string, itemID int) bool {
+	if objectKey == "" || strings.Contains(objectKey, "..") {
+		return false
+	}
+
+	prefix := fmt.Sprintf("%s/%d/", objectKeyPrefix, itemID)
+	if !strings.HasPrefix(objectKey, prefix) {
+		return false
+	}
+
+	remainder := strings.TrimPrefix(objectKey, prefix)
+	if remainder == "" || strings.Contains(remainder, "/") {
+		return false
+	}
+
+	dot := strings.LastIndex(remainder, ".")
+	if dot <= 0 {
+		return false
+	}
+
+	extension := remainder[dot+1:]
+	for _, allowed := range allowedImageTypes {
+		if extension == allowed {
+			return true
+		}
+	}
+
+	return false
+}
+
+func normalizeItem(item *shopdata.Item) {
+	item.Title = strings.TrimSpace(item.Title)
+	item.Description = strings.TrimSpace(item.Description)
+	item.BrandID = strings.TrimSpace(item.BrandID)
+	item.Brand = strings.TrimSpace(item.Brand)
+	item.Currency = strings.ToLower(strings.TrimSpace(item.Currency))
+
+	if item.Brand == "" {
+		item.BrandID = ""
+	} else if item.BrandID == "" {
+		item.BrandID = shopdata.SlugifyName(item.Brand)
+	}
+
+	if item.Currency == "" {
+		item.Currency = shopdata.DefaultCurrency
+	}
+}
+
+func applyItemPatch(item *shopdata.Item, patch *itemPatch) {
+	if patch.Title != nil {
+		item.Title = *patch.Title
+	}
+	if patch.Description != nil {
+		item.Description = *patch.Description
+	}
+	if patch.Brand != nil {
+		item.Brand = *patch.Brand
+		if patch.BrandID == nil {
+			item.BrandID = ""
+		}
+	}
+	if patch.BrandID != nil {
+		item.BrandID = *patch.BrandID
+	}
+	if patch.PriceCents != nil {
+		item.PriceCents = *patch.PriceCents
+	}
+	if patch.Currency != nil {
+		item.Currency = *patch.Currency
+	}
+	if patch.Stock != nil {
+		item.Stock = *patch.Stock
+	}
+	if patch.IsPublished != nil {
+		item.IsPublished = *patch.IsPublished
+	}
+}
+
+func isValidItem(item *shopdata.Item) error {
+	if item.Title == "" {
+		return errors.New("title is required")
+	}
+	if len([]rune(item.Title)) > maxTitleLength {
+		return fmt.Errorf("title must be at most %d characters", maxTitleLength)
+	}
+	if len([]rune(item.Description)) > maxDescriptionLength {
+		return fmt.Errorf("description must be at most %d characters", maxDescriptionLength)
+	}
+	if item.PriceCents <= 0 {
+		return fmt.Errorf("priceCents must be greater than zero, got %d", item.PriceCents)
+	}
+	if item.Stock < 0 {
+		return fmt.Errorf("stock must be non-negative, got %d", item.Stock)
+	}
+	if !validCurrency(item.Currency) {
+		return fmt.Errorf("invalid currency %q", item.Currency)
+	}
+
+	return nil
+}
+
+func validCurrency(currency string) bool {
+	if len(currency) != 3 {
+		return false
+	}
+
+	for _, character := range currency {
+		if character < 'a' || character > 'z' {
+			return false
+		}
+	}
+
+	return true
+}
+
+func normalizeBrand(brand *shopdata.Brand) {
+	brand.ID = strings.TrimSpace(brand.ID)
+	brand.Brand = strings.TrimSpace(brand.Brand)
+
+	if brand.ID == "" && brand.Brand != "" {
+		brand.ID = shopdata.SlugifyName(brand.Brand)
+	}
+}
+
+func isValidBrand(brand *shopdata.Brand) error {
+	if brand.ID == "" {
+		return errors.New("brand id is required")
+	}
+	if brand.Brand == "" {
+		return errors.New("brand name is required")
+	}
+
+	return nil
+}

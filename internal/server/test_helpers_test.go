@@ -6,9 +6,10 @@ import (
 	"log"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 
 	"thom-server/internal/coffee"
+	"thom-server/internal/shop"
 )
 
 const testAdminPasswordHash = "$2a$04$NcZBWqKwXIayYJceXw24N.PyNMu7vrnvSgWwROy1o9AMCIa3Rdl5i"
@@ -22,6 +23,7 @@ func newTestApp(t *testing.T) *App {
 		log.New(io.Discard, "", 0),
 		log.New(io.Discard, "", 0),
 		&coffee.Model{DB: db},
+		&shop.Model{DB: db},
 		Config{
 			AdminUsername:     "admin",
 			AdminPasswordHash: testAdminPasswordHash,
@@ -34,7 +36,7 @@ func newTestApp(t *testing.T) *App {
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +53,11 @@ func newTestDB(t *testing.T) *sql.DB {
 
 	coffeeModel := &coffee.Model{DB: db}
 	if err = coffeeModel.EnsureSchema(); err != nil {
+		t.Fatal(err)
+	}
+
+	shopModel := &shop.Model{DB: db}
+	if err = shopModel.EnsureSchema(); err != nil {
 		t.Fatal(err)
 	}
 

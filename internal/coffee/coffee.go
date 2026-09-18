@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
+	"strings"
 
 	"thom-server/internal/data"
 )
@@ -20,6 +21,7 @@ type Entry struct {
 	Roaster          string  `json:"roaster"`
 	BrewMethod       string  `json:"brewMethod"`
 	Ratio            string  `json:"ratio"`
+	GrinderID        string  `json:"grinderId"`
 	Grinder          string  `json:"grinder"`
 	GrindSetting     float64 `json:"grindSetting"`
 	Dose             int     `json:"dose"`
@@ -53,6 +55,12 @@ type EntrySummary struct {
 type Roaster struct {
 	ID        string `json:"id"`
 	Roaster   string `json:"roaster"`
+	CreatedAt string `json:"createdAt,omitempty"`
+}
+
+type Grinder struct {
+	ID        string `json:"id"`
+	Grinder   string `json:"grinder"`
 	CreatedAt string `json:"createdAt,omitempty"`
 }
 
@@ -92,6 +100,12 @@ func (m *Model) EnsureSchema() error {
 		CREATE INDEX IF NOT EXISTS CoffeeEntriesBrewDateIndex
 		ON CoffeeEntries(BrewDate DESC, id DESC);
 
+		CREATE INDEX IF NOT EXISTS CoffeeEntriesRoasterIndex
+		ON CoffeeEntries(RoasterID);
+
+		CREATE INDEX IF NOT EXISTS CoffeeEntriesBrewMethodIndex
+		ON CoffeeEntries(BrewMethod);
+
 		CREATE TABLE IF NOT EXISTS CoffeeRoasters (
 			id TEXT PRIMARY KEY,
 			Roaster TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -100,7 +114,17 @@ func (m *Model) EnsureSchema() error {
 		);
 
 		CREATE INDEX IF NOT EXISTS CoffeeRoastersSortIndex
-		ON CoffeeRoasters(SortOrder ASC, Roaster COLLATE NOCASE ASC);`
+		ON CoffeeRoasters(SortOrder ASC, Roaster COLLATE NOCASE ASC);
+
+		CREATE TABLE IF NOT EXISTS CoffeeGrinders (
+			id TEXT PRIMARY KEY,
+			Grinder TEXT NOT NULL COLLATE NOCASE UNIQUE,
+			SortOrder INTEGER NOT NULL DEFAULT 1000,
+			CreatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+
+		CREATE INDEX IF NOT EXISTS CoffeeGrindersSortIndex
+		ON CoffeeGrinders(SortOrder ASC, Grinder COLLATE NOCASE ASC);`
 
 	if _, err := m.DB.Exec(stmt); err != nil {
 		return err
@@ -110,7 +134,19 @@ func (m *Model) EnsureSchema() error {
 		return err
 	}
 
-	return m.seedEntryRoasters()
+	// GrinderID is added by ensureCoffeeEntryColumns, so its index can only be
+	// created after the column exists.
+	if _, err := m.DB.Exec(
+		`CREATE INDEX IF NOT EXISTS CoffeeEntriesGrinderIndex ON CoffeeEntries(GrinderID)`,
+	); err != nil {
+		return err
+	}
+
+	if err := m.backfillEntryGrinders(); err != nil {
+		return err
+	}
+
+	return m.seedEntryRoastersAndGrinders()
 }
 
 func (m *Model) ensureCoffeeEntryColumns() error {
@@ -147,6 +183,7 @@ func (m *Model) ensureCoffeeEntryColumns() error {
 		{name: "Origin", definition: "Origin TEXT NOT NULL DEFAULT ''"},
 		{name: "CoffeeVarietal", definition: "CoffeeVarietal TEXT NOT NULL DEFAULT ''"},
 		{name: "ProcessingMethod", definition: "ProcessingMethod TEXT NOT NULL DEFAULT ''"},
+		{name: "GrinderID", definition: "GrinderID TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, column := range columns {
 		if existingColumns[column.name] {
@@ -160,14 +197,78 @@ func (m *Model) ensureCoffeeEntryColumns() error {
 	return nil
 }
 
-func (m *Model) seedEntryRoasters() error {
-	stmt := `
+// backfillEntryGrinders gives legacy rows a GrinderID derived from their
+// free-text Grinder value and registers each distinct grinder in the lookup.
+func (m *Model) backfillEntryGrinders() error {
+	rows, err := m.DB.Query(
+		`SELECT DISTINCT Grinder FROM CoffeeEntries WHERE GrinderID = '' AND Grinder != ''`,
+	)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	names := make([]string, 0)
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			return err
+		}
+		names = append(names, name)
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+
+	for _, name := range names {
+		id := SlugifyName(name)
+		if id == "" {
+			continue
+		}
+		if _, err = m.DB.Exec(
+			`INSERT OR IGNORE INTO CoffeeGrinders (id, Grinder) VALUES (?, ?)`,
+			id,
+			name,
+		); err != nil {
+			return err
+		}
+
+		// The name may already exist under a different id, so resolve the row
+		// that actually holds the name before pointing entries at it.
+		existingGrinder, err := getGrinderByName(m.DB, name)
+		if err != nil {
+			return err
+		}
+		if _, err = m.DB.Exec(
+			`UPDATE CoffeeEntries SET GrinderID = ?
+			 WHERE GrinderID = '' AND Grinder = ? COLLATE NOCASE`,
+			existingGrinder.ID,
+			name,
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *Model) seedEntryRoastersAndGrinders() error {
+	roasters := `
 		INSERT OR IGNORE INTO CoffeeRoasters (id, Roaster)
 		SELECT RoasterID, Roaster
 		FROM CoffeeEntries
 		WHERE RoasterID != '' AND Roaster != ''`
+	if _, err := m.DB.Exec(roasters); err != nil {
+		return err
+	}
 
-	_, err := m.DB.Exec(stmt)
+	grinders := `
+		INSERT OR IGNORE INTO CoffeeGrinders (id, Grinder)
+		SELECT GrinderID, Grinder
+		FROM CoffeeEntries
+		WHERE GrinderID != '' AND Grinder != ''`
+
+	_, err := m.DB.Exec(grinders)
 	return err
 }
 
@@ -276,6 +377,118 @@ func getRoasterByID(q querier, id string) (*Roaster, error) {
 	return roaster, nil
 }
 
+func (m *Model) GetGrinders() ([]*Grinder, error) {
+	stmt := `
+		SELECT id, Grinder, CreatedAt
+		FROM CoffeeGrinders
+		ORDER BY SortOrder ASC, Grinder COLLATE NOCASE ASC`
+
+	rows, err := m.DB.Query(stmt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	grinders := make([]*Grinder, 0)
+	for rows.Next() {
+		grinder := &Grinder{}
+		if err = rows.Scan(&grinder.ID, &grinder.Grinder, &grinder.CreatedAt); err != nil {
+			return nil, err
+		}
+
+		grinders = append(grinders, grinder)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return grinders, nil
+}
+
+func (m *Model) UpsertGrinder(grinder *Grinder) (*Grinder, error) {
+	return m.upsertGrinder(grinder)
+}
+
+func (m *Model) upsertGrinder(grinder *Grinder) (*Grinder, error) {
+	existingGrinder, err := getGrinderByName(m.DB, grinder.Grinder)
+	if err == nil {
+		return existingGrinder, nil
+	}
+	if !errors.Is(err, data.ErrNoRecord) {
+		return nil, err
+	}
+
+	if grinder.ID == "" {
+		grinder.ID = SlugifyName(grinder.Grinder)
+	}
+	if grinder.ID == "" {
+		return nil, data.ErrNoRecord
+	}
+
+	existingGrinder, err = getGrinderByID(m.DB, grinder.ID)
+	if err == nil {
+		return existingGrinder, nil
+	}
+	if !errors.Is(err, data.ErrNoRecord) {
+		return nil, err
+	}
+
+	stmt := `
+		INSERT INTO CoffeeGrinders (id, Grinder)
+		VALUES (?, ?)`
+
+	if _, err = m.DB.Exec(stmt, grinder.ID, grinder.Grinder); err != nil {
+		return nil, err
+	}
+
+	return getGrinderByID(m.DB, grinder.ID)
+}
+
+func (m *Model) GetGrinderByName(name string) (*Grinder, error) {
+	return getGrinderByName(m.DB, name)
+}
+
+func getGrinderByName(q querier, name string) (*Grinder, error) {
+	stmt := `
+		SELECT id, Grinder, CreatedAt
+		FROM CoffeeGrinders
+		WHERE Grinder = ? COLLATE NOCASE`
+
+	grinder := &Grinder{}
+	err := q.QueryRow(stmt, name).Scan(&grinder.ID, &grinder.Grinder, &grinder.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, data.ErrNoRecord
+		}
+		return nil, err
+	}
+
+	return grinder, nil
+}
+
+func (m *Model) GetGrinderByID(id string) (*Grinder, error) {
+	return getGrinderByID(m.DB, id)
+}
+
+func getGrinderByID(q querier, id string) (*Grinder, error) {
+	stmt := `
+		SELECT id, Grinder, CreatedAt
+		FROM CoffeeGrinders
+		WHERE id = ?`
+
+	grinder := &Grinder{}
+	err := q.QueryRow(stmt, id).Scan(&grinder.ID, &grinder.Grinder, &grinder.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, data.ErrNoRecord
+		}
+		return nil, err
+	}
+
+	return grinder, nil
+}
+
 func (m *Model) GetAll() ([]*EntrySummary, error) {
 	stmt := `
 		SELECT id, BrewDate, CoffeeName, Origin, CoffeeVarietal, ProcessingMethod,
@@ -323,7 +536,7 @@ func (m *Model) GetAll() ([]*EntrySummary, error) {
 func (m *Model) GetByID(id int) (*Entry, error) {
 	stmt := `
 		SELECT id, BrewDate, CoffeeName, Origin, CoffeeVarietal, ProcessingMethod,
-			DaysSinceRoast, RoasterID, Roaster, BrewMethod, Ratio, Grinder,
+			DaysSinceRoast, RoasterID, Roaster, BrewMethod, Ratio, GrinderID, Grinder,
 			GrindSetting, Dose, YieldAmount, WaterTemperature, BrewTime,
 			BloomTime, BloomWater, PourNotes, RoastLevel, Notes, Rating, CreatedAt
 		FROM CoffeeEntries
@@ -348,14 +561,21 @@ func (m *Model) Insert(entry *Entry) (*Entry, error) {
 	entry.RoasterID = roaster.ID
 	entry.Roaster = roaster.Roaster
 
+	grinder, err := m.upsertGrinder(&Grinder{ID: entry.GrinderID, Grinder: entry.Grinder})
+	if err != nil {
+		return nil, err
+	}
+	entry.GrinderID = grinder.ID
+	entry.Grinder = grinder.Grinder
+
 	stmt := `
 		INSERT INTO CoffeeEntries (
 			BrewDate, CoffeeName, Origin, CoffeeVarietal, ProcessingMethod,
-			DaysSinceRoast, RoasterID, Roaster, BrewMethod, Ratio, Grinder,
+			DaysSinceRoast, RoasterID, Roaster, BrewMethod, Ratio, GrinderID, Grinder,
 			GrindSetting, Dose, YieldAmount, WaterTemperature, BrewTime,
 			BloomTime, BloomWater, PourNotes, RoastLevel, Notes, Rating
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	result, err := m.DB.Exec(
 		stmt,
@@ -369,6 +589,7 @@ func (m *Model) Insert(entry *Entry) (*Entry, error) {
 		entry.Roaster,
 		entry.BrewMethod,
 		entry.Ratio,
+		entry.GrinderID,
 		entry.Grinder,
 		entry.GrindSetting,
 		entry.Dose,
@@ -402,6 +623,13 @@ func (m *Model) Update(id int, entry *Entry) (*Entry, error) {
 	entry.RoasterID = roaster.ID
 	entry.Roaster = roaster.Roaster
 
+	grinder, err := m.upsertGrinder(&Grinder{ID: entry.GrinderID, Grinder: entry.Grinder})
+	if err != nil {
+		return nil, err
+	}
+	entry.GrinderID = grinder.ID
+	entry.Grinder = grinder.Grinder
+
 	stmt := `
 		UPDATE CoffeeEntries
 		SET BrewDate = ?,
@@ -414,6 +642,7 @@ func (m *Model) Update(id int, entry *Entry) (*Entry, error) {
 			Roaster = ?,
 			BrewMethod = ?,
 			Ratio = ?,
+			GrinderID = ?,
 			Grinder = ?,
 			GrindSetting = ?,
 			Dose = ?,
@@ -440,6 +669,7 @@ func (m *Model) Update(id int, entry *Entry) (*Entry, error) {
 		entry.Roaster,
 		entry.BrewMethod,
 		entry.Ratio,
+		entry.GrinderID,
 		entry.Grinder,
 		entry.GrindSetting,
 		entry.Dose,
@@ -515,6 +745,7 @@ func scanCoffeeEntry(s scanner) (*Entry, error) {
 		&entry.Roaster,
 		&entry.BrewMethod,
 		&entry.Ratio,
+		&entry.GrinderID,
 		&entry.Grinder,
 		&entry.GrindSetting,
 		&entry.Dose,
@@ -537,4 +768,26 @@ func scanCoffeeEntry(s scanner) (*Entry, error) {
 	entry.TastingNotes = entry.Notes
 
 	return entry, nil
+}
+
+// SlugifyName turns a display name into the stable id used by the roaster and
+// grinder lookups: lowercase alphanumerics separated by single dashes.
+func SlugifyName(value string) string {
+	var builder strings.Builder
+	lastWasDash := false
+
+	for _, r := range strings.ToLower(value) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+			lastWasDash = false
+			continue
+		}
+
+		if builder.Len() > 0 && !lastWasDash {
+			builder.WriteByte('-')
+			lastWasDash = true
+		}
+	}
+
+	return strings.Trim(builder.String(), "-")
 }

@@ -144,6 +144,46 @@ npx wrangler secret put ADMIN_USERNAME
 For local development, put the same hash in `.env.local` (gitignored) as
 `ADMIN_PASSWORD_HASH`.
 
+## R2 (shop images)
+
+Shop listings keep only the object key in D1; image bytes go straight from the
+browser to R2 with a presigned `PUT`. The container therefore needs bucket
+credentials. Set them as Worker secrets:
+
+```sh
+npx wrangler secret put R2_ACCESS_KEY_ID
+npx wrangler secret put R2_SECRET_ACCESS_KEY
+```
+
+The non-secret values live in the `vars` block of `wrangler.jsonc`:
+`R2_ACCOUNT_ID` (the same value as `D1_ACCOUNT_ID`), `R2_BUCKET`, and
+`R2_PUBLIC_BASE_URL`. `R2_PUBLIC_BASE_URL` is the scheme + host that serves the
+bucket's objects — the bucket's `r2.dev` URL or a custom domain — with no
+trailing slash. Public buckets do not list contents, so the bare root 404s and
+only full object paths resolve. `R2_ENDPOINT` is a test-only override; do not
+set it in a real environment.
+
+## Stripe (shop checkout)
+
+Checkout creates a hosted Stripe Checkout Session and redirects the browser, so
+no Stripe key ever ships to the client. Set the secrets:
+
+```sh
+npx wrangler secret put STRIPE_SECRET_KEY
+npx wrangler secret put STRIPE_WEBHOOK_SECRET
+```
+
+`STRIPE_TAX_ENABLED` (default `false`) and `STRIPE_SHIPPING_CENTS` (default `0`,
+meaning no shipping line) are vars in `wrangler.jsonc`. Leave tax off until tax
+registrations are configured; Stripe rejects `automatic_tax` otherwise.
+
+Point a webhook endpoint at `https://<server>/shop/webhooks/stripe` for the
+`checkout.session.completed` event and use its signing secret as
+`STRIPE_WEBHOOK_SECRET`. Locally, `stripe listen --forward-to
+localhost:4000/shop/webhooks/stripe` prints a temporary secret. The success and
+cancel redirects are derived from the first `CLIENT_ORIGIN_URLS` entry
+(`/shop/order?session_id=...` and `/shop`).
+
 ## Notes and trade-offs
 
 - D1 does not support interactive transactions, so `Model.Insert`/`Model.Update`
@@ -166,4 +206,4 @@ go test ./...
 ```
 
 `wrangler dev` (which runs the container) needs Docker; the D1 driver has its own
-tests that run without CGO: `go test ./internal/d1/`.
+tests: `go test ./internal/d1/`.

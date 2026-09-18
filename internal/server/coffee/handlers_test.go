@@ -15,7 +15,7 @@ import (
 	"thom-server/internal/data"
 	"thom-server/internal/server/response"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func TestGetCoffeeEntries(t *testing.T) {
@@ -169,6 +169,63 @@ func TestCreateCoffeeRoasterRejectsInvalidPayload(t *testing.T) {
 	}
 }
 
+func TestGetCoffeeGrinders(t *testing.T) {
+	app := newTestHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/coffee/grinders", nil)
+	rr := httptest.NewRecorder()
+
+	app.GetGrinders(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+
+	var grinders []coffeedata.Grinder
+	if err := json.Unmarshal(rr.Body.Bytes(), &grinders); err != nil {
+		t.Fatal(err)
+	}
+	if len(grinders) != 1 {
+		t.Fatalf("expected 1 grinder, got %d", len(grinders))
+	}
+	if grinders[0].ID != "fellow-ode" {
+		t.Fatalf("expected first grinder fellow-ode, got %q", grinders[0].ID)
+	}
+}
+
+func TestCreateCoffeeGrinder(t *testing.T) {
+	app := newTestHandler(t)
+	req := httptest.NewRequest(http.MethodPost, "/coffee/grinders", strings.NewReader(`{
+		"grinder": "1zpresso K-Ultra"
+	}`))
+	rr := httptest.NewRecorder()
+
+	app.CreateGrinder(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, rr.Code)
+	}
+
+	var grinder coffeedata.Grinder
+	if err := json.Unmarshal(rr.Body.Bytes(), &grinder); err != nil {
+		t.Fatal(err)
+	}
+	if grinder.ID != "1zpresso-k-ultra" {
+		t.Fatalf("expected generated grinder ID 1zpresso-k-ultra, got %q", grinder.ID)
+	}
+}
+
+func TestCreateCoffeeGrinderRejectsInvalidPayload(t *testing.T) {
+	app := newTestHandler(t)
+	req := httptest.NewRequest(http.MethodPost, "/coffee/grinders", strings.NewReader(`{"grinder": ""}`))
+	rr := httptest.NewRecorder()
+
+	app.CreateGrinder(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rr.Code)
+	}
+}
+
 func TestCreateCoffeeEntry(t *testing.T) {
 	app := newTestHandler(t)
 	req := httptest.NewRequest(http.MethodPost, "/coffee", strings.NewReader(`{
@@ -202,6 +259,9 @@ func TestCreateCoffeeEntry(t *testing.T) {
 	}
 	if entry.RoasterID != "shoebox" {
 		t.Fatalf("expected generated roaster ID shoebox, got %q", entry.RoasterID)
+	}
+	if entry.GrinderID != "comandante-c40" {
+		t.Fatalf("expected generated grinder ID comandante-c40, got %q", entry.GrinderID)
 	}
 	if entry.TastingNotes != "red fruit and caramel" {
 		t.Fatalf("expected tasting notes from notes, got %q", entry.TastingNotes)
@@ -443,7 +503,7 @@ func TestDeleteCoffeeEntryHandlesMissingEntry(t *testing.T) {
 func newTestHandler(t *testing.T) *Handler {
 	t.Helper()
 
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,18 +526,21 @@ func newTestHandler(t *testing.T) *Handler {
 	if _, err = db.Exec(`INSERT OR IGNORE INTO CoffeeRoasters (id, Roaster, SortOrder) VALUES ('shoebox', 'Shoebox', 10)`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.Exec(`INSERT OR IGNORE INTO CoffeeGrinders (id, Grinder, SortOrder) VALUES ('fellow-ode', 'Fellow Ode', 20)`); err != nil {
+		t.Fatal(err)
+	}
 
 	fixture := `
 		INSERT INTO CoffeeEntries (
 			id, BrewDate, CoffeeName, Origin, CoffeeVarietal, ProcessingMethod,
-			DaysSinceRoast, RoasterID, Roaster, BrewMethod, Ratio, Grinder,
+			DaysSinceRoast, RoasterID, Roaster, BrewMethod, Ratio, GrinderID, Grinder,
 			GrindSetting, Dose, YieldAmount, WaterTemperature, BrewTime,
 			BloomTime, BloomWater, PourNotes, RoastLevel, Notes, Rating, CreatedAt
 		)
 		VALUES (
 			1, '2026-05-20', 'Ethiopia Test Lot', 'Yirgacheffe, Ethiopia',
 			'Heirloom', 'Washed', 10, 'shoebox', 'Shoebox',
-			'v60', '1:16', 'fellow-ode', 4.2, 20, 320, 203,
+			'v60', '1:16', 'fellow-ode', 'fellow-ode', 4.2, 20, 320, 203,
 			'3:20', '45s', 50, 'Two-pour finish', 'light',
 			'floral, citrus, honey', 5, '2026-05-20 12:00:00'
 		);`

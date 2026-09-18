@@ -5,6 +5,7 @@ README.md
 .gitignore
 .env*
 .dev.vars
+*.db
 node_modules
 .wrangler
 worker

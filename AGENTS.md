@@ -72,11 +72,11 @@ This is a small Go 1.22 HTTP API server. The executable entrypoint lives in `cmd
 - `go run ./cmd/server -addr=":8080"`: run on a different port.
 - `go run ./cmd/server -db-path="./internal/thom.db"`: run against a specific SQLite database.
 - `go test ./...`: run all Go tests.
-- `go test ./internal/d1/`: run the D1 driver tests only (no CGO required).
+- `go test ./internal/d1/`: run the D1 driver tests only.
 - `go build ./cmd/server`: compile the server package.
 - `npx wrangler deploy`: build and deploy the Cloudflare Container and Worker (see `CLOUDFLARE.md`).
 
-For local authenticated routes, copy `.env.example` to `.env.local` and replace the placeholder auth values. `go run ./cmd/server` loads `.env.local` before reading configuration, while existing shell or container variables take precedence. The server uses Cloudflare D1 when `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, and `CF_API_TOKEN` are set, and the local SQLite file otherwise. Because `github.com/mattn/go-sqlite3` is still used for local runs and tests, builds need CGO support; the D1 path itself does not.
+For local authenticated routes, copy `.env.example` to `.env.local` and replace the placeholder auth values. `go run ./cmd/server` loads `.env.local` before reading configuration, while existing shell or container variables take precedence. The server uses Cloudflare D1 when `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, and `CF_API_TOKEN` are set, and the local SQLite file otherwise. Because `modernc.org/sqlite` is a pure-Go driver, local runs and tests need no C toolchain; the D1 path does not either.
 
 ## Coding Style & Naming Conventions
 
@@ -95,3 +95,33 @@ Pull requests should include a brief description, the routes or models changed, 
 ## Security & Configuration Tips
 
 Do not commit secrets, real `.env.local`/`.dev.vars` values, JWT secrets, or production password hashes. Cloudflare deployments use Worker secrets (`ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, `JWT_SECRET`, `CF_API_TOKEN`) and vars (`CLIENT_ORIGIN_URLS`, `SECURE_COOKIES`, `D1_ACCOUNT_ID`, `D1_DATABASE_ID`); keep `.env.example` and `.dev.vars.example` placeholder-only. `CF_API_TOKEN` is a D1 API token scoped to the account and must never be committed. Set `SECURE_COOKIES=true` for HTTPS environments (this also switches the auth cookie to the `__Host-` prefixed name). Login rate limiting and logout token revocation are in-memory only and reset when the container restarts or sleeps — acceptable for this single-instance deployment. Treat `internal/thom.db` as application data: review schema/data changes carefully and avoid accidental local-only mutations.
+
+## Outstanding work — Shop / Stripe (2026-09-17)
+
+Milestone 1 (listings + R2 images) and the milestone 2 Stripe backend are
+complete and locally verified. Remaining:
+
+- **Cloudflare MCP auth.** Run `/mcps` and sign in to `cloudflare`,
+  `cloudflare-bindings`, `cloudflare-builds`, `cloudflare-observability`.
+  `cloudflare-docs` is public and already connected; skills live in
+  `~/.agents/skills`.
+- **R2 images still 404.** No custom domain is connected to the bucket
+  (`images.thomhuang.com` has no DNS record). Connect one or use the bucket's
+  r2.dev URL, then match `R2_PUBLIC_BASE_URL` (scheme + host, no trailing slash).
+- **Not deployed.** Production runs the old binary, so `/api/shop/items` 404s.
+  Before deploying, set the Worker secrets `R2_ACCESS_KEY_ID`,
+  `R2_SECRET_ACCESS_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and
+  register the Stripe webhook endpoint `/shop/webhooks/stripe` for
+  `checkout.session.completed`. Tune `STRIPE_TAX_ENABLED` /
+  `STRIPE_SHIPPING_CENTS` in `wrangler.jsonc` (defaults: tax off, shipping 0).
+- **Admin orders UI is not built.** The backend `GET /shop/orders` and the typed
+  client methods `StartShopCheckoutAsync` / `GetShopOrderAsync` exist.
+  Oversold-at-webhook-time is logged only (no refund). The UI always sends
+  quantity 1.
+- **Nothing is committed** in either repo; `internal/thom.db` is a modified
+  application-data binary (decide deliberately whether to commit). Trust
+  `git diff --stat`, not `git status` (CRLF phantoms).
+- **`go test ./...` fails under Windows Smart App Control** ("An Application
+  Control policy has blocked this file") because test binaries in the temp build
+  dir are blocked. Workaround: `go test -c -o
+  "$env:LOCALAPPDATA\Temp\opencode\<pkg>.exe" <pkg>` and run that exe directly.

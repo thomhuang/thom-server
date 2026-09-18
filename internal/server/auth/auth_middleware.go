@@ -34,6 +34,35 @@ func (h *Handler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// OptionalAuth attaches claims when a valid session cookie is present but lets
+// anonymous requests through, so one route can serve both audiences. Handlers
+// use IsAuthenticated to vary what they return.
+func (h *Handler) OptionalAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie(h.authCookieName())
+		if err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		claims, err := h.verifyAuthToken(cookie.Value)
+		if err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), authClaimsContextKey, claims)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	}
+}
+
+// IsAuthenticated reports whether RequireAuth or OptionalAuth attached claims.
+func IsAuthenticated(r *http.Request) bool {
+	_, ok := claimsFromRequest(r)
+
+	return ok
+}
+
 func isMutatingMethod(method string) bool {
 	return method != http.MethodGet &&
 		method != http.MethodHead &&

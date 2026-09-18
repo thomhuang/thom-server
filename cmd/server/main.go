@@ -11,10 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 
 	"thom-server/internal/coffee"
 	"thom-server/internal/server"
+	"thom-server/internal/shop"
 )
 
 func main() {
@@ -47,16 +48,32 @@ func main() {
 		errorLog.Fatal(err)
 	}
 
+	shopModel := &shop.Model{DB: appDB}
+	if err := shopModel.EnsureSchema(); err != nil {
+		errorLog.Fatal(err)
+	}
+
+	clientOrigins := server.ClientOriginsFromEnv()
+
+	r2Config := server.R2ConfigFromEnv()
+	if err := r2Config.Validate(); err != nil {
+		errorLog.Printf("R2 image uploads will fail: %v", err)
+	}
+
 	app := server.New(
 		errorLog,
 		infoLog,
 		coffeeModel,
+		shopModel,
 		server.Config{
 			AdminUsername:     os.Getenv("ADMIN_USERNAME"),
 			AdminPasswordHash: os.Getenv("ADMIN_PASSWORD_HASH"),
 			JWTSecret:         os.Getenv("JWT_SECRET"),
-			ClientOrigins:     server.ClientOriginsFromEnv(),
+			ClientOrigins:     clientOrigins,
 			SecureCookies:     server.SecureCookiesFromEnv(),
+			R2:                r2Config,
+			R2PublicBaseURL:   server.R2PublicBaseURLFromEnv(),
+			Stripe:            server.StripeConfigFromEnv(clientOrigins),
 		},
 	)
 
