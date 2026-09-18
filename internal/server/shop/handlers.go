@@ -9,7 +9,6 @@ import (
 	"log"
 	"math"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -125,7 +124,7 @@ func (h *Handler) GetItems(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetItemByID(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.readPositiveIntPath(w, r, "id")
+	id, ok := h.responder.ReadPositiveIntPath(w, r, "id")
 	if !ok {
 		return
 	}
@@ -225,7 +224,7 @@ func (h *Handler) CreateItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateItem(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.readPositiveIntPath(w, r, "id")
+	id, ok := h.responder.ReadPositiveIntPath(w, r, "id")
 	if !ok {
 		return
 	}
@@ -266,7 +265,7 @@ func (h *Handler) UpdateItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteItem(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.readPositiveIntPath(w, r, "id")
+	id, ok := h.responder.ReadPositiveIntPath(w, r, "id")
 	if !ok {
 		return
 	}
@@ -288,7 +287,7 @@ func (h *Handler) DeleteItem(w http.ResponseWriter, r *http.Request) {
 // PresignImageUpload returns a short-lived URL the browser PUTs an image to, so
 // image bytes never pass through the container.
 func (h *Handler) PresignImageUpload(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.readPositiveIntPath(w, r, "id")
+	id, ok := h.responder.ReadPositiveIntPath(w, r, "id")
 	if !ok {
 		return
 	}
@@ -352,7 +351,7 @@ func (h *Handler) PresignImageUpload(w http.ResponseWriter, r *http.Request) {
 
 // CreateImage records an object that the browser has already uploaded.
 func (h *Handler) CreateImage(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.readPositiveIntPath(w, r, "id")
+	id, ok := h.responder.ReadPositiveIntPath(w, r, "id")
 	if !ok {
 		return
 	}
@@ -401,12 +400,12 @@ func (h *Handler) CreateImage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteImage(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.readPositiveIntPath(w, r, "id")
+	id, ok := h.responder.ReadPositiveIntPath(w, r, "id")
 	if !ok {
 		return
 	}
 
-	imageID, ok := h.readPositiveIntPath(w, r, "imageId")
+	imageID, ok := h.responder.ReadPositiveIntPath(w, r, "imageId")
 	if !ok {
 		return
 	}
@@ -444,16 +443,6 @@ func (h *Handler) publicImageURL(objectKey string) string {
 	}
 
 	return h.publicURL + "/" + objectKey
-}
-
-func (h *Handler) readPositiveIntPath(w http.ResponseWriter, r *http.Request, key string) (int, bool) {
-	value, err := strconv.Atoi(r.PathValue(key))
-	if err != nil || value < 1 {
-		h.responder.BadRequest(w)
-		return 0, false
-	}
-
-	return value, true
 }
 
 // newObjectKey builds shop/{itemID}/{random}.{ext}. The random name prevents

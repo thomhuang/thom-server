@@ -5,7 +5,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -71,7 +70,7 @@ func (h *Handler) GetEntries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetEntryByID(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.readPositiveIntPath(w, r, "id")
+	id, ok := h.responder.ReadPositiveIntPath(w, r, "id")
 	if !ok {
 		return
 	}
@@ -201,7 +200,7 @@ func (h *Handler) CreateEntry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateEntry(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.readPositiveIntPath(w, r, "id")
+	id, ok := h.responder.ReadPositiveIntPath(w, r, "id")
 	if !ok {
 		return
 	}
@@ -248,7 +247,7 @@ func (h *Handler) UpdateEntry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteEntry(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.readPositiveIntPath(w, r, "id")
+	id, ok := h.responder.ReadPositiveIntPath(w, r, "id")
 	if !ok {
 		return
 	}
@@ -261,16 +260,6 @@ func (h *Handler) DeleteEntry(w http.ResponseWriter, r *http.Request) {
 	h.infoLog.Printf("DELETE_ENTRY id=%d", id)
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *Handler) readPositiveIntPath(w http.ResponseWriter, r *http.Request, key string) (int, bool) {
-	id, err := strconv.Atoi(r.PathValue(key))
-	if err != nil || id < 1 {
-		h.responder.BadRequest(w)
-		return 0, false
-	}
-
-	return id, true
 }
 
 func normalizeCoffeeEntry(entry *coffeedata.Entry) {

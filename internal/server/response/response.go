@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 )
 
 const maxJSONBodySize = 1 << 20
@@ -50,6 +51,18 @@ func (r Responder) ServerError(w http.ResponseWriter, err error) {
 
 func (r Responder) ClientError(w http.ResponseWriter, status int) {
 	http.Error(w, http.StatusText(status), status)
+}
+
+// ReadPositiveIntPath parses a positive integer path parameter, writing a 400
+// and returning false when it is missing or not a positive integer.
+func (r Responder) ReadPositiveIntPath(w http.ResponseWriter, req *http.Request, key string) (int, bool) {
+	value, err := strconv.Atoi(req.PathValue(key))
+	if err != nil || value < 1 {
+		r.BadRequest(w)
+		return 0, false
+	}
+
+	return value, true
 }
 
 func (r Responder) BadRequest(w http.ResponseWriter) {

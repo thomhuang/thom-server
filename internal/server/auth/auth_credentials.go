@@ -3,12 +3,13 @@ package auth
 import (
 	"crypto/subtle"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"thom-server/internal/clientip"
 )
 
 func (h *Handler) authConfigured() bool {
@@ -37,16 +38,7 @@ func (h *Handler) validLoginCredentials(request loginRequest) bool {
 }
 
 func loginThrottleKey(r *http.Request, username string) string {
-	// Cloudflare sets CF-Connecting-IP; RemoteAddr would be the proxy's
-	// address.
-	host := strings.TrimSpace(r.Header.Get("CF-Connecting-IP"))
-	if host == "" {
-		if remoteHost, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && remoteHost != "" {
-			host = remoteHost
-		} else {
-			host = r.RemoteAddr
-		}
-	}
+	host := clientip.FromRequest(r)
 
 	return strings.ToLower(host) + "|" + strings.ToLower(strings.TrimSpace(username))
 }

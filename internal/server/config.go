@@ -32,10 +32,10 @@ type StripeConfig struct {
 	CancelURL     string
 }
 
-// MinJWTSecretLength is the shortest signing secret the server accepts. A short
+// minJWTSecretLength is the shortest signing secret the server accepts. A short
 // secret is the difference between a forgeable session and a real one, so the
 // server refuses to start rather than sign with one.
-const MinJWTSecretLength = 32
+const minJWTSecretLength = 32
 
 func (c Config) authConfig() auth.Config {
 	return auth.Config{
@@ -48,8 +48,8 @@ func (c Config) authConfig() auth.Config {
 
 // Validate rejects configuration that would be insecure if the server started.
 func (c Config) Validate() error {
-	if c.JWTSecret != "" && len(c.JWTSecret) < MinJWTSecretLength {
-		return fmt.Errorf("JWT_SECRET must be at least %d characters, got %d", MinJWTSecretLength, len(c.JWTSecret))
+	if c.JWTSecret != "" && len(c.JWTSecret) < minJWTSecretLength {
+		return fmt.Errorf("JWT_SECRET must be at least %d characters, got %d", minJWTSecretLength, len(c.JWTSecret))
 	}
 
 	return nil

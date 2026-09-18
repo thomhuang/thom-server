@@ -1,12 +1,12 @@
 package server
 
 import (
-	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
+
+	"thom-server/internal/clientip"
 )
 
 // Checkout is public and every call creates a Stripe Checkout Session and a
@@ -78,21 +78,6 @@ func (l *rateLimiter) allow(key string) (bool, time.Duration) {
 	return true, 0
 }
 
-// clientIP is the rate-limit key. Cloudflare overwrites CF-Connecting-IP at the
-// edge, so it carries the real client address rather than a value the caller can
-// choose; RemoteAddr is the fallback for local runs.
-func clientIP(r *http.Request) string {
-	if host := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); host != "" {
-		return host
-	}
-
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && host != "" {
-		return host
-	}
-
-	return r.RemoteAddr
-}
-
 // limitCheckout rejects a client that has started too many Checkout Sessions
 // recently. It wraps the route so a throttled request never reaches Stripe or
 // inserts a pending order.
@@ -101,7 +86,7 @@ func clientIP(r *http.Request) string {
 // Stripe retries failed deliveries, so throttling it would drop real payments.
 func (app *App) limitCheckout(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		key := clientIP(r)
+		key := clientip.FromRequest(r)
 
 		allowed, retryAfter := app.checkoutLimiter.allow(key)
 		if !allowed {

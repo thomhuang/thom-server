@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"thom-server/internal/clientip"
 )
 
 func TestRateLimiterAllowsUpToLimitThenBlocks(t *testing.T) {
@@ -82,8 +84,8 @@ func TestClientIPPrefersCFConnectingIP(t *testing.T) {
 	request.Header.Set("CF-Connecting-IP", "203.0.113.7")
 	request.RemoteAddr = "10.0.0.1:5555"
 
-	if got, want := clientIP(request), "203.0.113.7"; got != want {
-		t.Fatalf("clientIP() = %q, want %q", got, want)
+	if got, want := clientip.FromRequest(request), "203.0.113.7"; got != want {
+		t.Fatalf("clientip.FromRequest() = %q, want %q", got, want)
 	}
 }
 
@@ -91,8 +93,8 @@ func TestClientIPFallsBackToRemoteAddr(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/shop/checkout", nil)
 	request.RemoteAddr = "10.0.0.1:5555"
 
-	if got, want := clientIP(request), "10.0.0.1"; got != want {
-		t.Fatalf("clientIP() = %q, want %q", got, want)
+	if got, want := clientip.FromRequest(request), "10.0.0.1"; got != want {
+		t.Fatalf("clientip.FromRequest() = %q, want %q", got, want)
 	}
 }
 

@@ -9,9 +9,9 @@ import (
 	"thom-server/internal/d1"
 )
 
-// D1ConfigFromEnv reports the Cloudflare D1 settings when every required
+// d1ConfigFromEnv reports the Cloudflare D1 settings when every required
 // variable is present.
-func D1ConfigFromEnv() (d1.Config, bool) {
+func d1ConfigFromEnv() (d1.Config, bool) {
 	accountID := strings.TrimSpace(os.Getenv("D1_ACCOUNT_ID"))
 	databaseID := strings.TrimSpace(os.Getenv("D1_DATABASE_ID"))
 	apiToken := strings.TrimSpace(os.Getenv("CF_API_TOKEN"))
@@ -31,7 +31,7 @@ func D1ConfigFromEnv() (d1.Config, bool) {
 // fallback: test and production both run on D1, and local development points at
 // the test database through the same variables.
 func OpenAppDB() (*sql.DB, error) {
-	cfg, ok := D1ConfigFromEnv()
+	cfg, ok := d1ConfigFromEnv()
 	if !ok {
 		return nil, errors.New("D1 is not configured: set D1_ACCOUNT_ID, D1_DATABASE_ID, and CF_API_TOKEN")
 	}
