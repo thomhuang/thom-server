@@ -170,53 +170,15 @@ func (m *Model) EnsureSchema() error {
 
 // ensureShopItemColumns adds listing columns that predate the current schema.
 func (m *Model) ensureShopItemColumns() error {
-	rows, err := m.DB.Query(`PRAGMA table_info(ShopItems)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	existingColumns := make(map[string]bool)
-	for rows.Next() {
-		var (
-			cid          int
-			name         string
-			columnType   string
-			notNull      int
-			defaultValue sql.NullString
-			primaryKey   int
-		)
-		if err = rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
-		}
-		existingColumns[name] = true
-	}
-	if err = rows.Err(); err != nil {
-		return err
-	}
-
-	columns := []struct {
-		name       string
-		definition string
-	}{
-		{name: "BrandID", definition: "BrandID TEXT NOT NULL DEFAULT ''"},
-		{name: "Brand", definition: "Brand TEXT NOT NULL DEFAULT ''"},
+	return data.EnsureColumns(m.DB, "ShopItems", []data.Column{
+		{Name: "BrandID", Definition: "BrandID TEXT NOT NULL DEFAULT ''"},
+		{Name: "Brand", Definition: "Brand TEXT NOT NULL DEFAULT ''"},
 		// Optional garment measurements in inches. REAL so a half inch is exact
 		// enough; 0 means the listing has no measurement.
-		{name: "PitToPitInches", definition: "PitToPitInches REAL NOT NULL DEFAULT 0"},
-		{name: "BackLengthInches", definition: "BackLengthInches REAL NOT NULL DEFAULT 0"},
-		{name: "ShoulderInches", definition: "ShoulderInches REAL NOT NULL DEFAULT 0"},
-	}
-	for _, column := range columns {
-		if existingColumns[column.name] {
-			continue
-		}
-		if _, err = m.DB.Exec("ALTER TABLE ShopItems ADD COLUMN " + column.definition); err != nil {
-			return err
-		}
-	}
-
-	return nil
+		{Name: "PitToPitInches", Definition: "PitToPitInches REAL NOT NULL DEFAULT 0"},
+		{Name: "BackLengthInches", Definition: "BackLengthInches REAL NOT NULL DEFAULT 0"},
+		{Name: "ShoulderInches", Definition: "ShoulderInches REAL NOT NULL DEFAULT 0"},
+	})
 }
 
 // GetItems returns listings newest first. Unpublished items are included only
@@ -305,10 +267,7 @@ func (m *Model) GetItemByID(id int) (*Item, error) {
 		&item.UpdatedAt,
 	)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, data.ErrNoRecord
-		}
-		return nil, err
+		return nil, data.NoRecord(err)
 	}
 
 	item.ID = strconv.Itoa(itemID)
@@ -476,10 +435,7 @@ func (m *Model) DeleteImage(itemID, imageID int) (*Image, error) {
 		&image.SortOrder,
 	)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, data.ErrNoRecord
-		}
-		return nil, err
+		return nil, data.NoRecord(err)
 	}
 	image.ID = strconv.Itoa(id)
 
@@ -551,10 +507,7 @@ func (m *Model) getImageByID(id int) (*Image, error) {
 		&image.SortOrder,
 	)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, data.ErrNoRecord
-		}
-		return nil, err
+		return nil, data.NoRecord(err)
 	}
 	image.ID = strconv.Itoa(imageID)
 
@@ -649,10 +602,7 @@ func getBrandByName(q querier, name string) (*Brand, error) {
 	brand := &Brand{}
 	err := q.QueryRow(stmt, name).Scan(&brand.ID, &brand.Brand, &brand.CreatedAt)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, data.ErrNoRecord
-		}
-		return nil, err
+		return nil, data.NoRecord(err)
 	}
 
 	return brand, nil
@@ -671,10 +621,7 @@ func getBrandByID(q querier, id string) (*Brand, error) {
 	brand := &Brand{}
 	err := q.QueryRow(stmt, id).Scan(&brand.ID, &brand.Brand, &brand.CreatedAt)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, data.ErrNoRecord
-		}
-		return nil, err
+		return nil, data.NoRecord(err)
 	}
 
 	return brand, nil
@@ -683,23 +630,7 @@ func getBrandByID(q querier, id string) (*Brand, error) {
 // SlugifyName turns a display name into the stable id used by the brand
 // lookup: lowercase alphanumerics separated by single dashes.
 func SlugifyName(value string) string {
-	var builder strings.Builder
-	lastWasDash := false
-
-	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			builder.WriteRune(r)
-			lastWasDash = false
-			continue
-		}
-
-		if builder.Len() > 0 && !lastWasDash {
-			builder.WriteByte('-')
-			lastWasDash = true
-		}
-	}
-
-	return strings.Trim(builder.String(), "-")
+	return data.SlugifyName(value)
 }
 
 func currencyOr(currency string) string {

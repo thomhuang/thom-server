@@ -4,7 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"thom-server/internal/r2"
 )
 
 func TestLoadLocalEnv(t *testing.T) {
@@ -114,6 +117,139 @@ func TestClientOriginsFromEnv(t *testing.T) {
 				t.Fatalf("ClientOriginsFromEnv() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestConfigValidateJWTSecret(t *testing.T) {
+	tests := []struct {
+		name    string
+		secret  string
+		wantErr bool
+	}{
+		{
+			name:   "empty secret is allowed",
+			secret: "",
+		},
+		{
+			name:    "31 characters is rejected",
+			secret:  strings.Repeat("a", 31),
+			wantErr: true,
+		},
+		{
+			name:   "32 characters is allowed",
+			secret: strings.Repeat("a", 32),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Config{JWTSecret: tt.secret}.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSecureCookiesFromEnv(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "true", value: "true", want: true},
+		{name: "uppercase true", value: "TRUE", want: true},
+		{name: "false", value: "false", want: false},
+		{name: "one", value: "1", want: false},
+		{name: "empty", value: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("SECURE_COOKIES", tt.value)
+
+			if got := SecureCookiesFromEnv(); got != tt.want {
+				t.Fatalf("SecureCookiesFromEnv() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStripeConfigFromEnv(t *testing.T) {
+	origins := []string{"https://example.com/"}
+
+	tests := []struct {
+		name          string
+		taxEnabled    string
+		shippingCents string
+		wantTax       bool
+		wantShipping  int
+	}{
+		{
+			name: "defaults",
+		},
+		{
+			name:       "tax enabled",
+			taxEnabled: "true",
+			wantTax:    true,
+		},
+		{
+			name:       "tax disabled",
+			taxEnabled: "false",
+		},
+		{
+			name:          "shipping cents parsed",
+			shippingCents: "500",
+			wantShipping:  500,
+		},
+		{
+			// A non-numeric value silently falls back to 0; this pins that
+			// current behavior rather than asserting it is desirable.
+			name:          "non-numeric shipping falls back to zero",
+			shippingCents: "abc",
+			wantShipping:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("STRIPE_TAX_ENABLED", tt.taxEnabled)
+			t.Setenv("STRIPE_SHIPPING_CENTS", tt.shippingCents)
+
+			got := StripeConfigFromEnv(origins)
+			if got.TaxEnabled != tt.wantTax {
+				t.Fatalf("TaxEnabled = %v, want %v", got.TaxEnabled, tt.wantTax)
+			}
+			if got.ShippingCents != tt.wantShipping {
+				t.Fatalf("ShippingCents = %d, want %d", got.ShippingCents, tt.wantShipping)
+			}
+			if want := "https://example.com/shop/order?session_id={CHECKOUT_SESSION_ID}"; got.SuccessURL != want {
+				t.Fatalf("SuccessURL = %q, want %q", got.SuccessURL, want)
+			}
+			if want := "https://example.com/shop"; got.CancelURL != want {
+				t.Fatalf("CancelURL = %q, want %q", got.CancelURL, want)
+			}
+		})
+	}
+}
+
+func TestR2ConfigFromEnvTrimsWhitespace(t *testing.T) {
+	t.Setenv("R2_ACCOUNT_ID", "  account  ")
+	t.Setenv("R2_BUCKET", " bucket ")
+	t.Setenv("R2_ACCESS_KEY_ID", " key ")
+	t.Setenv("R2_SECRET_ACCESS_KEY", " secret ")
+	t.Setenv("R2_ENDPOINT", " https://example.com ")
+
+	want := r2.Config{
+		AccountID:       "account",
+		Bucket:          "bucket",
+		AccessKeyID:     "key",
+		SecretAccessKey: "secret",
+		Endpoint:        "https://example.com",
+	}
+
+	if got := R2ConfigFromEnv(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("R2ConfigFromEnv() = %#v, want %#v", got, want)
 	}
 }
 

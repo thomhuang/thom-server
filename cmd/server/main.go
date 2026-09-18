@@ -85,8 +85,10 @@ func main() {
 		ErrorLog:          errorLog,
 		Handler:           app.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       time.Minute,
+		// Must stay above the D1/R2 client timeouts (30s) so a slow-but-valid
+		// outbound call is not aborted after a write may have committed.
+		WriteTimeout: 40 * time.Second,
+		IdleTimeout:  time.Minute,
 	}
 
 	shutdown := make(chan os.Signal, 1)

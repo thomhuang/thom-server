@@ -14,7 +14,6 @@ import (
 )
 
 type App struct {
-	errorLog        *log.Logger
 	infoLog         *log.Logger
 	coffee          *coffeedata.Model
 	shop            *shopdata.Model
@@ -31,7 +30,6 @@ func New(errorLog, infoLog *log.Logger, coffeeModel *coffeedata.Model, shopModel
 		infoLog = log.New(io.Discard, "", 0)
 	}
 	app := &App{
-		errorLog:        errorLog,
 		infoLog:         infoLog,
 		coffee:          coffeeModel,
 		shop:            shopModel,

@@ -23,10 +23,13 @@ func (r *statusRecorder) Flush() {
 
 func (app *App) commonMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The Allow-Origin response depends on the request Origin, so Vary must
+		// be set even when the origin is not allowlisted.
+		w.Header().Add("Vary", "Origin")
+
 		if app.isAllowedOrigin(r.Header.Get("Origin")) {
 			w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Add("Vary", "Origin")
 		}
 
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")

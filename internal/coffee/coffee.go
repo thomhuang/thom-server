@@ -4,18 +4,17 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
-	"strings"
 
 	"thom-server/internal/data"
 )
 
 type Entry struct {
-	ID               string `json:"id"`
-	Date             string `json:"date"`
-	CoffeeName       string `json:"coffeeName"`
-	Origin           string `json:"origin"`
-	CoffeeVarietal   string `json:"coffeeVarietal"`
-	ProcessingMethod string `json:"processingMethod"`
+	ID               string  `json:"id"`
+	Date             string  `json:"date"`
+	CoffeeName       string  `json:"coffeeName"`
+	Origin           string  `json:"origin"`
+	CoffeeVarietal   string  `json:"coffeeVarietal"`
+	ProcessingMethod string  `json:"processingMethod"`
 	DaysSinceRoast   int     `json:"daysSinceRoast"`
 	RoasterID        string  `json:"roasterId"`
 	Roaster          string  `json:"roaster"`
@@ -30,12 +29,12 @@ type Entry struct {
 	BrewTime         string  `json:"brewTime"`
 	BloomTime        string  `json:"bloomTime"`
 	BloomWater       int     `json:"bloomWater"`
-	PourNotes        string `json:"pourNotes"`
-	RoastLevel       string `json:"roastLevel"`
-	Notes            string `json:"notes"`
-	TastingNotes     string `json:"tastingNotes,omitempty"`
-	Rating           int    `json:"rating"`
-	CreatedAt        string `json:"createdAt,omitempty"`
+	PourNotes        string  `json:"pourNotes"`
+	RoastLevel       string  `json:"roastLevel"`
+	Notes            string  `json:"notes"`
+	TastingNotes     string  `json:"tastingNotes,omitempty"`
+	Rating           int     `json:"rating"`
+	CreatedAt        string  `json:"createdAt,omitempty"`
 }
 
 type EntrySummary struct {
@@ -150,51 +149,12 @@ func (m *Model) EnsureSchema() error {
 }
 
 func (m *Model) ensureCoffeeEntryColumns() error {
-	rows, err := m.DB.Query(`PRAGMA table_info(CoffeeEntries)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	existingColumns := make(map[string]bool)
-	for rows.Next() {
-		var (
-			cid          int
-			name         string
-			columnType   string
-			notNull      int
-			defaultValue sql.NullString
-			primaryKey   int
-		)
-
-		if err = rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
-		}
-		existingColumns[name] = true
-	}
-	if err = rows.Err(); err != nil {
-		return err
-	}
-
-	columns := []struct {
-		name       string
-		definition string
-	}{
-		{name: "Origin", definition: "Origin TEXT NOT NULL DEFAULT ''"},
-		{name: "CoffeeVarietal", definition: "CoffeeVarietal TEXT NOT NULL DEFAULT ''"},
-		{name: "ProcessingMethod", definition: "ProcessingMethod TEXT NOT NULL DEFAULT ''"},
-		{name: "GrinderID", definition: "GrinderID TEXT NOT NULL DEFAULT ''"},
-	}
-	for _, column := range columns {
-		if existingColumns[column.name] {
-			continue
-		}
-		if _, err = m.DB.Exec("ALTER TABLE CoffeeEntries ADD COLUMN " + column.definition); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return data.EnsureColumns(m.DB, "CoffeeEntries", []data.Column{
+		{Name: "Origin", Definition: "Origin TEXT NOT NULL DEFAULT ''"},
+		{Name: "CoffeeVarietal", Definition: "CoffeeVarietal TEXT NOT NULL DEFAULT ''"},
+		{Name: "ProcessingMethod", Definition: "ProcessingMethod TEXT NOT NULL DEFAULT ''"},
+		{Name: "GrinderID", Definition: "GrinderID TEXT NOT NULL DEFAULT ''"},
+	})
 }
 
 // backfillEntryGrinders gives legacy rows a GrinderID derived from their
@@ -314,6 +274,13 @@ func (m *Model) upsertRoaster(roaster *Roaster) (*Roaster, error) {
 		return nil, err
 	}
 
+	if roaster.ID == "" {
+		roaster.ID = SlugifyName(roaster.Roaster)
+	}
+	if roaster.ID == "" {
+		return nil, data.ErrNoRecord
+	}
+
 	existingRoaster, err = getRoasterByID(m.DB, roaster.ID)
 	if err == nil {
 		return existingRoaster, nil
@@ -346,10 +313,7 @@ func getRoasterByName(q querier, name string) (*Roaster, error) {
 	roaster := &Roaster{}
 	err := q.QueryRow(stmt, name).Scan(&roaster.ID, &roaster.Roaster, &roaster.CreatedAt)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, data.ErrNoRecord
-		}
-		return nil, err
+		return nil, data.NoRecord(err)
 	}
 
 	return roaster, nil
@@ -368,10 +332,7 @@ func getRoasterByID(q querier, id string) (*Roaster, error) {
 	roaster := &Roaster{}
 	err := q.QueryRow(stmt, id).Scan(&roaster.ID, &roaster.Roaster, &roaster.CreatedAt)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, data.ErrNoRecord
-		}
-		return nil, err
+		return nil, data.NoRecord(err)
 	}
 
 	return roaster, nil
@@ -458,10 +419,7 @@ func getGrinderByName(q querier, name string) (*Grinder, error) {
 	grinder := &Grinder{}
 	err := q.QueryRow(stmt, name).Scan(&grinder.ID, &grinder.Grinder, &grinder.CreatedAt)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, data.ErrNoRecord
-		}
-		return nil, err
+		return nil, data.NoRecord(err)
 	}
 
 	return grinder, nil
@@ -480,10 +438,7 @@ func getGrinderByID(q querier, id string) (*Grinder, error) {
 	grinder := &Grinder{}
 	err := q.QueryRow(stmt, id).Scan(&grinder.ID, &grinder.Grinder, &grinder.CreatedAt)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, data.ErrNoRecord
-		}
-		return nil, err
+		return nil, data.NoRecord(err)
 	}
 
 	return grinder, nil
@@ -544,10 +499,7 @@ func (m *Model) GetByID(id int) (*Entry, error) {
 
 	entry, err := scanCoffeeEntry(m.DB.QueryRow(stmt, id))
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, data.ErrNoRecord
-		}
-		return nil, err
+		return nil, data.NoRecord(err)
 	}
 
 	return entry, nil
@@ -725,7 +677,6 @@ type scanner interface {
 }
 
 type querier interface {
-	Exec(query string, args ...any) (sql.Result, error)
 	QueryRow(query string, args ...any) *sql.Row
 }
 
@@ -773,21 +724,5 @@ func scanCoffeeEntry(s scanner) (*Entry, error) {
 // SlugifyName turns a display name into the stable id used by the roaster and
 // grinder lookups: lowercase alphanumerics separated by single dashes.
 func SlugifyName(value string) string {
-	var builder strings.Builder
-	lastWasDash := false
-
-	for _, r := range strings.ToLower(value) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			builder.WriteRune(r)
-			lastWasDash = false
-			continue
-		}
-
-		if builder.Len() > 0 && !lastWasDash {
-			builder.WriteByte('-')
-			lastWasDash = true
-		}
-	}
-
-	return strings.Trim(builder.String(), "-")
+	return data.SlugifyName(value)
 }

@@ -1,8 +1,6 @@
 package shop
 
 import (
-	"database/sql"
-	"errors"
 	"strconv"
 
 	"thom-server/internal/data"
@@ -111,10 +109,7 @@ func (m *Model) GetOrderBySessionID(sessionID string) (*Order, error) {
 		&order.UpdatedAt,
 	)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, data.ErrNoRecord
-		}
-		return nil, err
+		return nil, data.NoRecord(err)
 	}
 
 	order.ID = strconv.Itoa(orderID)
@@ -177,10 +172,45 @@ func (m *Model) ListOrders() ([]*Order, error) {
 		return nil, err
 	}
 
-	for index, orderID := range orderIDs {
-		lines, err := m.getOrderLines(orderID)
-		if err != nil {
+	linesByOrder := make(map[int][]*OrderLine)
+	lineRows, err := m.DB.Query(
+		`SELECT OrderID, id, ItemID, Title, UnitPriceCents, Quantity
+		 FROM ShopOrderLines
+		 WHERE OrderID IN (SELECT id FROM ShopOrders)
+		 ORDER BY OrderID ASC, id ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer lineRows.Close()
+
+	for lineRows.Next() {
+		line := &OrderLine{}
+		var orderID, lineID int
+
+		if err = lineRows.Scan(
+			&orderID,
+			&lineID,
+			&line.ItemID,
+			&line.Title,
+			&line.UnitPriceCents,
+			&line.Quantity,
+		); err != nil {
 			return nil, err
+		}
+
+		line.ID = strconv.Itoa(lineID)
+		linesByOrder[orderID] = append(linesByOrder[orderID], line)
+	}
+
+	if err = lineRows.Err(); err != nil {
+		return nil, err
+	}
+
+	for index, orderID := range orderIDs {
+		lines, ok := linesByOrder[orderID]
+		if !ok {
+			lines = make([]*OrderLine, 0)
 		}
 		orders[index].Lines = lines
 	}

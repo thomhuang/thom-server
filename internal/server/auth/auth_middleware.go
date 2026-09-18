@@ -7,6 +7,8 @@ import (
 
 func (h *Handler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+
 		cookie, err := r.Cookie(h.authCookieName())
 		if err != nil {
 			h.infoLog.Printf("AUTH missing cookie %s %s", r.Method, r.URL.Path)
@@ -26,8 +28,6 @@ func (h *Handler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 			h.clientError(w, http.StatusForbidden)
 			return
 		}
-
-		w.Header().Set("Cache-Control", "no-store")
 
 		ctx := context.WithValue(r.Context(), authClaimsContextKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))

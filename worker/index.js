@@ -27,6 +27,7 @@ export class ThomServer extends Container {
     D1_ACCOUNT_ID: envText(env.D1_ACCOUNT_ID),
     D1_DATABASE_ID: envText(env.D1_DATABASE_ID),
     D1_ENDPOINT: envText(env.D1_ENDPOINT),
+    R2_ENDPOINT: envText(env.R2_ENDPOINT),
     CF_API_TOKEN: envText(env.CF_API_TOKEN),
     R2_ACCOUNT_ID: envText(env.R2_ACCOUNT_ID),
     R2_BUCKET: envText(env.R2_BUCKET),

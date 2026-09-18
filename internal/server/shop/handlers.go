@@ -71,22 +71,6 @@ func New(model *shopdata.Model, images ImageStore, publicURL string, responder r
 	}
 }
 
-type itemRequest struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	BrandID     string `json:"brandId"`
-	Brand       string `json:"brand"`
-	PriceCents  *int   `json:"priceCents"`
-	Currency    string `json:"currency"`
-	Stock       *int   `json:"stock"`
-	IsPublished *bool  `json:"isPublished"`
-	// Garment measurements in inches. Optional, so a missing field and an
-	// explicit 0 both mean "not provided".
-	PitToPitInches   *float64 `json:"pitToPitInches"`
-	BackLengthInches *float64 `json:"backLengthInches"`
-	ShoulderInches   *float64 `json:"shoulderInches"`
-}
-
 type itemPatch struct {
 	Title       *string `json:"title"`
 	Description *string `json:"description"`
@@ -207,38 +191,15 @@ func (h *Handler) CreateBrand(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) CreateItem(w http.ResponseWriter, r *http.Request) {
-	var request itemRequest
+	var request itemPatch
 	if err := h.responder.DecodeJSON(w, r.Body, &request); err != nil {
 		h.infoLog.Printf("failed to decode shop item JSON: %v", err)
 		h.responder.BadRequest(w)
 		return
 	}
 
-	item := &shopdata.Item{
-		Title:       request.Title,
-		Description: request.Description,
-		BrandID:     request.BrandID,
-		Brand:       request.Brand,
-		Currency:    request.Currency,
-	}
-	if request.PriceCents != nil {
-		item.PriceCents = *request.PriceCents
-	}
-	if request.Stock != nil {
-		item.Stock = *request.Stock
-	}
-	if request.IsPublished != nil {
-		item.IsPublished = *request.IsPublished
-	}
-	if request.PitToPitInches != nil {
-		item.PitToPitInches = *request.PitToPitInches
-	}
-	if request.BackLengthInches != nil {
-		item.BackLengthInches = *request.BackLengthInches
-	}
-	if request.ShoulderInches != nil {
-		item.ShoulderInches = *request.ShoulderInches
-	}
+	item := &shopdata.Item{}
+	applyItemPatch(item, &request)
 
 	normalizeItem(item)
 	if err := isValidItem(item); err != nil {
