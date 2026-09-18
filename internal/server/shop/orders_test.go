@@ -123,7 +123,7 @@ func TestCheckoutRejectsNonPositiveQuantity(t *testing.T) {
 	}
 }
 
-func TestGetOrderReturnsOrderBySessionID(t *testing.T) {
+func TestGetOrderReturnsPublicViewWithoutPII(t *testing.T) {
 	handler, _ := newTestHandler(t)
 
 	if _, err := handler.shop.InsertPendingOrder("cs_lookup", &shopdata.Order{
@@ -133,17 +133,52 @@ func TestGetOrderReturnsOrderBySessionID(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A paid order carries the buyer's name, email, and shipping address; none of
+	// it may appear in the anonymous confirmation response.
+	if _, err := handler.shop.MarkOrderPaid("cs_lookup", shopdata.PaidDetails{
+		CustomerEmail:    "buyer@example.com",
+		CustomerName:     "Ada Lovelace",
+		ShippingAddress:  "1 Analytical Way, London",
+		ShipName:         "Ada Lovelace",
+		ShipLine1:        "1 Analytical Way",
+		ShipCity:         "London",
+		ShipCountry:      "GB",
+		AmountTotalCents: 1800,
+		Currency:         "usd",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	rr := serve(handler.GetOrder, http.MethodGet, "/shop/orders/cs_lookup", "", "sessionId", "cs_lookup")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
 	}
 
-	var order shopdata.Order
-	if err := json.Unmarshal(rr.Body.Bytes(), &order); err != nil {
+	body := rr.Body.Bytes()
+	for _, personal := range []string{
+		"buyer@example.com",
+		"Ada Lovelace",
+		"Analytical Way",
+		"London",
+		"customerEmail",
+		"customerName",
+		"shippingAddress",
+		"shipLine1",
+	} {
+		if bytes.Contains(body, []byte(personal)) {
+			t.Fatalf("public order response leaked %q: %s", personal, rr.Body.String())
+		}
+	}
+
+	var order publicOrder
+	if err := json.Unmarshal(body, &order); err != nil {
 		t.Fatal(err)
 	}
-	if order.StripeSessionID != "cs_lookup" {
-		t.Fatalf("session id = %q, want cs_lookup", order.StripeSessionID)
+	if order.ID == "" || order.Status != shopdata.OrderStatusPaid {
+		t.Fatalf("public order = %+v, want an id and paid status", order)
+	}
+	if len(order.Lines) != 1 || order.Lines[0].Title != "Test mug" {
+		t.Fatalf("lines = %+v, want the snapshot line", order.Lines)
 	}
 }
 

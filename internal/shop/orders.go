@@ -106,8 +106,9 @@ func (m *Model) InsertPendingOrder(sessionID string, order *Order) (*Order, erro
 	return m.GetOrderBySessionID(sessionID)
 }
 
-// GetOrderBySessionID looks an order up by its unguessable Stripe session id,
-// which is safe to use as a public lookup key.
+// GetOrderBySessionID looks an order up by its unguessable Stripe session id.
+// Callers serving anonymous requests must redact the customer and shipping
+// fields; the id alone is not authorization for personal data.
 func (m *Model) GetOrderBySessionID(sessionID string) (*Order, error) {
 	order := &Order{}
 	var orderID int

@@ -167,8 +167,24 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GetOrder returns one order by its unguessable session id. A predictable id
-// would let anyone enumerate orders and harvest addresses.
+// publicOrder is the buyer-facing view of an order. It deliberately omits the
+// customer name, email, and every shipping field: the session id can leak
+// through browser history, shared links, or logs, so it is not sufficient
+// authorization for personal data. Full orders are only returned by the
+// authenticated admin list.
+type publicOrder struct {
+	ID               string                `json:"id"`
+	Status           string                `json:"status"`
+	AmountTotalCents int                   `json:"amountTotalCents"`
+	Currency         string                `json:"currency"`
+	Lines            []*shopdata.OrderLine `json:"lines"`
+	RefundedAt       string                `json:"refundedAt"`
+	CreatedAt        string                `json:"createdAt"`
+	UpdatedAt        string                `json:"updatedAt"`
+}
+
+// GetOrder returns the buyer-facing view of one order by its unguessable
+// session id. It never includes personal data.
 func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 	sessionID := strings.TrimSpace(r.PathValue("sessionId"))
 	if sessionID == "" {
@@ -181,7 +197,16 @@ func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = h.responder.WriteJSON(w, http.StatusOK, order, nil); err != nil {
+	if err = h.responder.WriteJSON(w, http.StatusOK, publicOrder{
+		ID:               order.ID,
+		Status:           order.Status,
+		AmountTotalCents: order.AmountTotalCents,
+		Currency:         order.Currency,
+		Lines:            order.Lines,
+		RefundedAt:       order.RefundedAt,
+		CreatedAt:        order.CreatedAt,
+		UpdatedAt:        order.UpdatedAt,
+	}, nil); err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}

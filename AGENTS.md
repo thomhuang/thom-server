@@ -137,6 +137,13 @@ list live in `D:\Repos\BOARD.md`; this section only records durable gotchas.
   adds them to existing databases. A `refund_pending` order means a refund was
   requested but Stripe had not confirmed it; Stripe webhook redelivery retries
   it, and a `refund_pending` order with no payment intent is left for an operator.
+- **`GET /shop/orders/{sessionId}` is public and returns no personal data.** It
+  serves the buyer's confirmation page, keyed only on the Stripe session id, so
+  it returns status/total/lines and omits customer name, email, and every
+  shipping field (`publicOrder` in `internal/server/shop/orders.go`). The session
+  id can leak via browser history, shared links, or logs, so it is not sufficient
+  authorization for PII. The full order (with PII) is only returned by the
+  authenticated `GET /shop/orders` admin list.
 - **`POST /shop/checkout` is rate-limited per client** (10 per 10 minutes,
   fixed window) by `internal/server/ratelimit.go`, keyed on `CF-Connecting-IP`.
   The limiter is in-memory, so it resets when the container restarts and is not
