@@ -233,6 +233,47 @@ func TestStripeConfigFromEnv(t *testing.T) {
 	}
 }
 
+func TestEmailConfigFromEnv(t *testing.T) {
+	origins := []string{"https://example.com/"}
+	restoreEnv(t, "EMAIL_API_TOKEN", "EMAIL_ACCOUNT_ID", "EMAIL_FROM", "EMAIL_FROM_NAME", "PUBLIC_SITE_URL")
+
+	t.Run("trims values and defaults the site url to the first origin", func(t *testing.T) {
+		t.Setenv("EMAIL_API_TOKEN", " token ")
+		t.Setenv("EMAIL_ACCOUNT_ID", " acct ")
+		t.Setenv("EMAIL_FROM", " orders@example.com ")
+		t.Setenv("EMAIL_FROM_NAME", " Thom Huang ")
+		t.Setenv("PUBLIC_SITE_URL", "")
+
+		got := EmailConfigFromEnv(origins)
+		want := EmailConfig{
+			APIToken:  "token",
+			AccountID: "acct",
+			From:      "orders@example.com",
+			FromName:  "Thom Huang",
+			SiteURL:   "https://example.com",
+		}
+		if got != want {
+			t.Fatalf("EmailConfigFromEnv() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("public site url overrides the origin", func(t *testing.T) {
+		t.Setenv("PUBLIC_SITE_URL", "https://shop.example.com/")
+
+		if got := EmailConfigFromEnv(origins).SiteURL; got != "https://shop.example.com" {
+			t.Fatalf("SiteURL = %q, want the trimmed override", got)
+		}
+	})
+
+	t.Run("no origins leaves the site url empty", func(t *testing.T) {
+		t.Setenv("PUBLIC_SITE_URL", "")
+
+		if got := EmailConfigFromEnv(nil).SiteURL; got != "" {
+			t.Fatalf("SiteURL = %q, want empty without an origin", got)
+		}
+	})
+}
+
 func TestR2ConfigFromEnvTrimsWhitespace(t *testing.T) {
 	t.Setenv("R2_ACCOUNT_ID", "  account  ")
 	t.Setenv("R2_BUCKET", " bucket ")

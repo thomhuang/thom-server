@@ -1,6 +1,10 @@
 package shop
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"strconv"
 	"strings"
 
@@ -68,7 +72,37 @@ type PaidDetails struct {
 	ShipCountry      string
 	AmountTotalCents int
 	Currency         string
+	ViewTokenHash    string
 }
+
+// NewOrderViewToken returns a random bearer token for the buyer's order link and
+// the hash stored for it. Only the hash is persisted; the raw token is emailed
+// and never written to the database.
+func NewOrderViewToken() (string, string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", "", err
+	}
+
+	token := base64.RawURLEncoding.EncodeToString(raw)
+
+	return token, HashOrderViewToken(token), nil
+}
+
+// HashOrderViewToken hashes a view token for storage and lookup. Tokens are
+// high-entropy random values, so a plain SHA-256 is enough; there is no
+// dictionary to slow down.
+func HashOrderViewToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+
+	return hex.EncodeToString(sum[:])
+}
+
+// orderColumns is the full column list every single-order read scans. It is a
+// constant so the session and view-token lookups cannot drift apart.
+const orderColumns = `id, StripeSessionID, Status, CustomerEmail, CustomerName, ShippingAddress,
+	ShipName, ShipLine1, ShipLine2, ShipCity, ShipState, ShipPostalCode, ShipCountry,
+	AmountTotalCents, Currency, RefundedAt, RefundReason, CreatedAt, UpdatedAt`
 
 // InsertPendingOrder records a Checkout Session and the lines the customer is
 // paying for. D1 has no interactive transactions, so the order row and its
@@ -110,16 +144,27 @@ func (m *Model) InsertPendingOrder(sessionID string, order *Order) (*Order, erro
 // Callers serving anonymous requests must redact the customer and shipping
 // fields; the id alone is not authorization for personal data.
 func (m *Model) GetOrderBySessionID(sessionID string) (*Order, error) {
+	return m.getOrder("StripeSessionID = ?", sessionID)
+}
+
+// GetOrderByViewToken looks an order up by the hash of the magic-link token
+// emailed to the buyer. The raw token is never stored. The caller treats the
+// token as the credential, so this returns the full order.
+func (m *Model) GetOrderByViewToken(tokenHash string) (*Order, error) {
+	return m.getOrder("ViewTokenHash = ? AND ViewTokenHash <> ''", tokenHash)
+}
+
+// getOrder loads one order and its lines. where is a package constant clause,
+// never caller input.
+func (m *Model) getOrder(where string, arg any) (*Order, error) {
 	order := &Order{}
 	var orderID int
 
 	err := m.DB.QueryRow(
-		`SELECT id, StripeSessionID, Status, CustomerEmail, CustomerName, ShippingAddress,
-			ShipName, ShipLine1, ShipLine2, ShipCity, ShipState, ShipPostalCode, ShipCountry,
-			AmountTotalCents, Currency, RefundedAt, RefundReason, CreatedAt, UpdatedAt
+		`SELECT `+orderColumns+`
 		 FROM ShopOrders
-		 WHERE StripeSessionID = ?`,
-		sessionID,
+		 WHERE `+where,
+		arg,
 	).Scan(
 		&orderID,
 		&order.StripeSessionID,
@@ -162,9 +207,7 @@ func (m *Model) GetOrderBySessionID(sessionID string) (*Order, error) {
 // page.
 func (m *Model) ListOrdersPage(limit, cursor int) ([]*Order, int, error) {
 	rows, err := m.DB.Query(
-		`SELECT id, StripeSessionID, Status, CustomerEmail, CustomerName, ShippingAddress,
-			ShipName, ShipLine1, ShipLine2, ShipCity, ShipState, ShipPostalCode, ShipCountry,
-			AmountTotalCents, Currency, RefundedAt, RefundReason, CreatedAt, UpdatedAt
+		`SELECT `+orderColumns+`
 		 FROM ShopOrders
 		 WHERE (? = 0 OR id < ?)
 		 ORDER BY id DESC
@@ -309,6 +352,7 @@ func (m *Model) MarkOrderPaid(sessionID string, details PaidDetails) (bool, erro
 			ShipCountry = ?,
 			AmountTotalCents = ?,
 			Currency = ?,
+			ViewTokenHash = ?,
 			UpdatedAt = datetime('now')
 		 WHERE StripeSessionID = ? AND Status <> ?`,
 		OrderStatusPaid,
@@ -324,6 +368,7 @@ func (m *Model) MarkOrderPaid(sessionID string, details PaidDetails) (bool, erro
 		details.ShipCountry,
 		details.AmountTotalCents,
 		currencyOr(details.Currency),
+		details.ViewTokenHash,
 		sessionID,
 		OrderStatusPaid,
 	)

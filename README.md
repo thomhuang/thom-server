@@ -56,10 +56,10 @@ secrets from 1Password. The server refuses to start without D1 configured.
 
 Secrets are referenced, never stored in the repo: the committed `.env.op` holds
 `op://` paths for `CF_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
-`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `ADMIN_PASSWORD_HASH`, and
-`JWT_SECRET`. `scripts/dev-op.ps1` runs `op run`, so 1Password resolves those
-fields and injects them into the server process only — nothing is written to
-disk and your shell is left untouched.
+`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `EMAIL_API_TOKEN`,
+`ADMIN_PASSWORD_HASH`, and `JWT_SECRET`. `scripts/dev-op.ps1` runs `op run`, so
+1Password resolves those fields and injects them into the server process only —
+nothing is written to disk and your shell is left untouched.
 
 One-time setup: install the desktop app and CLI (desktop first), then open a new
 shell so `op` is on `PATH`:
@@ -104,6 +104,7 @@ JWT cookie auth is configured with environment variables:
 - `CLIENT_ORIGIN_URLS`: comma-separated frontend origins allowed to send cookies.
 - `SECURE_COOKIES`: set to `true` in HTTPS environments; this also switches the auth cookie to the `__Host-` prefixed name. The cookie is always `SameSite=Lax`, since the API is same-origin with the site.
 - `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, `CF_API_TOKEN`, `D1_ENDPOINT`: required. The server only talks to Cloudflare D1. `D1_DATABASE_ID` selects test or production and `D1_ENDPOINT` defaults to the public Cloudflare API. `CF_API_TOKEN` is a secret and is never committed.
+- `EMAIL_ACCOUNT_ID`, `EMAIL_FROM`, `EMAIL_FROM_NAME`, `EMAIL_API_TOKEN`, `PUBLIC_SITE_URL`: buyer order-link email via Cloudflare Email Service. Order email is disabled unless the account id, from address, and token are all set. `PUBLIC_SITE_URL` defaults to the first `CLIENT_ORIGIN_URLS` entry.
 
 Generate a bcrypt password hash with:
 

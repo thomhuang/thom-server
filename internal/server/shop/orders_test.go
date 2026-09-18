@@ -9,15 +9,32 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stripe/stripe-go/v86"
 
+	"thom-server/internal/mail"
 	shopdata "thom-server/internal/shop"
 )
 
 const testWebhookSecret = "whsec_test"
+
+type fakeMailer struct {
+	messages []mail.Message
+	err      error
+}
+
+func (f *fakeMailer) Send(_ context.Context, message mail.Message) error {
+	if f.err != nil {
+		return f.err
+	}
+
+	f.messages = append(f.messages, message)
+
+	return nil
+}
 
 type fakeStripeClient struct {
 	lastParams CheckoutParams
@@ -180,6 +197,191 @@ func TestGetOrderReturnsPublicViewWithoutPII(t *testing.T) {
 	if len(order.Lines) != 1 || order.Lines[0].Title != "Test mug" {
 		t.Fatalf("lines = %+v, want the snapshot line", order.Lines)
 	}
+}
+
+func TestGetOrderByViewTokenReturnsFullOrder(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	if _, err := handler.shop.InsertPendingOrder("cs_view", &shopdata.Order{Currency: "usd"}); err != nil {
+		t.Fatal(err)
+	}
+
+	rawToken, tokenHash, err := shopdata.NewOrderViewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handler.shop.MarkOrderPaid("cs_view", shopdata.PaidDetails{
+		CustomerEmail:    "buyer@example.com",
+		CustomerName:     "Ada Lovelace",
+		ShipName:         "Ada Lovelace",
+		ShipLine1:        "1 Analytical Way",
+		ShipCity:         "London",
+		ShipCountry:      "GB",
+		ShippingAddress:  "1 Analytical Way, London, GB",
+		AmountTotalCents: 1800,
+		Currency:         "usd",
+		ViewTokenHash:    tokenHash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := serve(handler.GetOrderByViewToken, http.MethodGet, "/shop/orders/view/"+rawToken, "", "token", rawToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	// The token is the credential, so this view is allowed to include the
+	// customer and shipping fields that the session-keyed view redacts.
+	for _, personal := range []string{"buyer@example.com", "Ada Lovelace", "Analytical Way"} {
+		if !bytes.Contains(rr.Body.Bytes(), []byte(personal)) {
+			t.Fatalf("full order response is missing %q: %s", personal, rr.Body.String())
+		}
+	}
+
+	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+	if got := rr.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Fatalf("Referrer-Policy = %q, want no-referrer", got)
+	}
+	if got := rr.Header().Get("X-Robots-Tag"); got != "noindex" {
+		t.Fatalf("X-Robots-Tag = %q, want noindex", got)
+	}
+}
+
+func TestGetOrderByViewTokenUnknownAndEmpty(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	if rr := serve(handler.GetOrderByViewToken, http.MethodGet, "/shop/orders/view/nope", "", "token", "nope"); rr.Code != http.StatusNotFound {
+		t.Fatalf("unknown token status = %d, want %d", rr.Code, http.StatusNotFound)
+	}
+
+	if rr := serve(handler.GetOrderByViewToken, http.MethodGet, "/shop/orders/view/", "", "token", ""); rr.Code != http.StatusBadRequest {
+		t.Fatalf("empty token status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+func TestStripeWebhookEmailsOrderViewLink(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	mailer := &fakeMailer{}
+	handler.WithStripe(&fakeStripeClient{}, StripeSettings{WebhookSecret: testWebhookSecret}).
+		WithMailer(mailer, "https://www.example.com/")
+
+	if _, err := handler.shop.InsertPendingOrder("cs_email", &shopdata.Order{
+		Currency: "usd",
+		Lines:    []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := checkoutCompletedPayload(t, "cs_email", 1800)
+	recorder := httptest.NewRecorder()
+	handler.StripeWebhook(recorder, webhookRequest(t, payload, testWebhookSecret))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if len(mailer.messages) != 1 {
+		t.Fatalf("sent %d emails, want exactly 1", len(mailer.messages))
+	}
+
+	message := mailer.messages[0]
+	if message.To != "buyer@example.com" {
+		t.Fatalf("recipient = %q, want buyer@example.com", message.To)
+	}
+	if message.Text == "" || message.HTML == "" {
+		t.Fatalf("message = %+v, want both text and html parts", message)
+	}
+
+	// The emailed link is the only copy of the raw token, so the view endpoint
+	// can only be exercised by extracting it from the message.
+	token := viewTokenFromEmail(t, message.Text)
+	rr := serve(handler.GetOrderByViewToken, http.MethodGet, "/shop/orders/view/"+token, "", "token", token)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("view status = %d, want %d (%s)", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if !bytes.Contains(rr.Body.Bytes(), []byte("Test mug")) {
+		t.Fatalf("view response is missing the order line: %s", rr.Body.String())
+	}
+}
+
+func TestStripeWebhookEmailsOnceAcrossDuplicateDeliveries(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	mailer := &fakeMailer{}
+	handler.WithStripe(&fakeStripeClient{}, StripeSettings{WebhookSecret: testWebhookSecret}).
+		WithMailer(mailer, "https://www.example.com")
+
+	if _, err := handler.shop.InsertPendingOrder("cs_email_dup", &shopdata.Order{
+		Currency: "usd",
+		Lines:    []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := checkoutCompletedPayload(t, "cs_email_dup", 1800)
+	for delivery := 0; delivery < 2; delivery++ {
+		recorder := httptest.NewRecorder()
+		handler.StripeWebhook(recorder, webhookRequest(t, payload, testWebhookSecret))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("delivery %d status = %d, want %d", delivery, recorder.Code, http.StatusOK)
+		}
+	}
+
+	if len(mailer.messages) != 1 {
+		t.Fatalf("sent %d emails across duplicate deliveries, want 1", len(mailer.messages))
+	}
+}
+
+func TestStripeWebhookStillSucceedsWhenEmailFails(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	mailer := &fakeMailer{err: errors.New("smtp down")}
+	handler.WithStripe(&fakeStripeClient{}, StripeSettings{WebhookSecret: testWebhookSecret}).
+		WithMailer(mailer, "https://www.example.com")
+
+	if _, err := handler.shop.InsertPendingOrder("cs_email_fail", &shopdata.Order{
+		Currency: "usd",
+		Lines:    []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := checkoutCompletedPayload(t, "cs_email_fail", 1800)
+	recorder := httptest.NewRecorder()
+	handler.StripeWebhook(recorder, webhookRequest(t, payload, testWebhookSecret))
+
+	// A mail failure must not make Stripe redeliver the webhook: the payment is
+	// already recorded and a retry would not resend anyway.
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	order, err := handler.shop.GetOrderBySessionID("cs_email_fail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != shopdata.OrderStatusPaid {
+		t.Fatalf("status = %q, want paid", order.Status)
+	}
+}
+
+func viewTokenFromEmail(t *testing.T, body string) string {
+	t.Helper()
+
+	const marker = "/shop/order/view?token="
+	index := strings.Index(body, marker)
+	if index < 0 {
+		t.Fatalf("email body has no order link: %s", body)
+	}
+
+	token := body[index+len(marker):]
+	if end := strings.IndexAny(token, " \n\r\t"); end >= 0 {
+		token = token[:end]
+	}
+	if token == "" {
+		t.Fatal("email link has an empty token")
+	}
+
+	return token
 }
 
 func TestStripeWebhookRejectsBadSignature(t *testing.T) {

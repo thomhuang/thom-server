@@ -37,6 +37,10 @@
     "R2_ACCOUNT_ID": "d267f5667d69d024b78f3435e213c77d",
     "R2_BUCKET": "listing-images",
     "R2_PUBLIC_BASE_URL": "https://img.thomhuang.com",
+    "EMAIL_ACCOUNT_ID": "d267f5667d69d024b78f3435e213c77d",
+    "EMAIL_FROM": "orders@thomhuang.com",
+    "EMAIL_FROM_NAME": "Thom Huang",
+    "PUBLIC_SITE_URL": "https://www.thomhuang.com",
     "STRIPE_TAX_ENABLED": "false",
     "STRIPE_SHIPPING_CENTS": "0"
   }

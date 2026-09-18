@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"strconv"
@@ -12,6 +14,7 @@ import (
 	"github.com/stripe/stripe-go/v86"
 	"github.com/stripe/stripe-go/v86/webhook"
 
+	"thom-server/internal/mail"
 	shopdata "thom-server/internal/shop"
 )
 
@@ -75,6 +78,15 @@ type checkoutResponse struct {
 func (h *Handler) WithStripe(client StripeClient, settings StripeSettings) *Handler {
 	h.stripe = client
 	h.stripeSettings = settings
+
+	return h
+}
+
+// WithMailer attaches the transactional email sender and the site URL used to
+// build the buyer's order link. A nil sender leaves order email disabled.
+func (h *Handler) WithMailer(sender mail.Sender, siteURL string) *Handler {
+	h.mailer = sender
+	h.siteURL = strings.TrimSuffix(strings.TrimSpace(siteURL), "/")
 
 	return h
 }
@@ -212,6 +224,35 @@ func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// GetOrderByViewToken returns the full order to a buyer who followed the magic
+// link emailed after payment. The token is the credential, so this response
+// includes the customer and shipping fields; the session-keyed confirmation
+// endpoint stays redacted. The response is marked no-store so the token and the
+// personal data are not cached.
+func (h *Handler) GetOrderByViewToken(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimSpace(r.PathValue("token"))
+	if token == "" {
+		h.responder.BadRequest(w)
+		return
+	}
+
+	order, err := h.shop.GetOrderByViewToken(shopdata.HashOrderViewToken(token))
+	if h.responder.HandleDataError(w, err) {
+		return
+	}
+
+	headers := http.Header{
+		"Cache-Control":   {"no-store"},
+		"Referrer-Policy": {"no-referrer"},
+		"X-Robots-Tag":    {"noindex"},
+	}
+
+	if err = h.responder.WriteJSON(w, http.StatusOK, order, headers); err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+}
+
 // orderListResponse wraps a page of orders with the cursor for the next page.
 type orderListResponse struct {
 	Orders     []*shopdata.Order `json:"orders"`
@@ -308,7 +349,16 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 		paymentIntentID = session.PaymentIntent.ID
 	}
 
-	changed, err := h.shop.MarkOrderPaid(session.ID, paidDetailsFrom(&session))
+	viewToken, viewTokenHash, err := shopdata.NewOrderViewToken()
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+
+	details := paidDetailsFrom(&session)
+	details.ViewTokenHash = viewTokenHash
+
+	changed, err := h.shop.MarkOrderPaid(session.ID, details)
 	if err != nil {
 		h.responder.ServerError(w, err)
 		return
@@ -345,7 +395,8 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.decrementOrderStock(order) {
+	oversold := h.decrementOrderStock(order)
+	if oversold {
 		if _, err = h.shop.MarkOrderRefundPending(session.ID, "oversold"); err != nil {
 			h.infoLog.Printf("failed to mark order %s refund pending: %v", session.ID, err)
 			h.responder.ServerError(w, err)
@@ -356,9 +407,80 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 			h.responder.ServerError(w, err)
 			return
 		}
+	} else {
+		h.sendOrderEmail(r.Context(), order, viewToken)
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// sendOrderEmail mails the buyer a link to the full order. Sending is
+// best-effort: the payment is already recorded, so a failure is logged rather
+// than returned, which would make Stripe redeliver the webhook.
+func (h *Handler) sendOrderEmail(ctx context.Context, order *shopdata.Order, viewToken string) {
+	if h.mailer == nil || h.siteURL == "" || order.CustomerEmail == "" || viewToken == "" {
+		return
+	}
+
+	link := h.siteURL + "/shop/order/view?token=" + viewToken
+	text, markup := orderEmailBody(order, link)
+
+	err := h.mailer.Send(ctx, mail.Message{
+		To:      order.CustomerEmail,
+		Subject: "Your order #" + order.ID,
+		Text:    text,
+		HTML:    markup,
+	})
+	if err != nil {
+		h.infoLog.Printf("failed to send order email for %s: %v", order.ID, err)
+		return
+	}
+
+	h.infoLog.Printf("ORDER_EMAIL order=%s to=%s", order.ID, order.CustomerEmail)
+}
+
+// orderEmailBody renders the order summary and link into the plain-text and
+// HTML parts of one email. Titles and addresses are escaped because they are
+// admin or buyer input.
+func orderEmailBody(order *shopdata.Order, link string) (string, string) {
+	var plain, markup strings.Builder
+
+	plain.WriteString("Thanks for your order.\n\n")
+	fmt.Fprintf(&plain, "Order #%s\n\n", order.ID)
+
+	markup.WriteString("<p>Thanks for your order.</p>\n")
+	fmt.Fprintf(&markup, "<p><strong>Order #%s</strong></p>\n", html.EscapeString(order.ID))
+
+	markup.WriteString("<ul>\n")
+	for _, line := range order.Lines {
+		fmt.Fprintf(&plain, "%d x %s\n", line.Quantity, line.Title)
+		fmt.Fprintf(
+			&markup,
+			"<li>%d &times; %s</li>\n",
+			line.Quantity,
+			html.EscapeString(line.Title),
+		)
+	}
+	markup.WriteString("</ul>\n")
+
+	amount := formatAmount(order.AmountTotalCents, order.Currency)
+	fmt.Fprintf(&plain, "\nTotal: %s\n", amount)
+	fmt.Fprintf(&markup, "<p>Total: %s</p>\n", html.EscapeString(amount))
+
+	if order.ShippingAddress != "" {
+		fmt.Fprintf(&plain, "\nShipping to:\n%s\n", order.ShippingAddress)
+		fmt.Fprintf(&markup, "<p>Shipping to:<br>%s</p>\n", html.EscapeString(order.ShippingAddress))
+	}
+
+	fmt.Fprintf(&plain, "\nView your order: %s\n", link)
+	fmt.Fprintf(&markup, "<p><a href=\"%s\">View your order</a></p>\n", html.EscapeString(link))
+
+	return plain.String(), markup.String()
+}
+
+// formatAmount renders cents as a currency string, for example "USD 18.00".
+func formatAmount(cents int, currency string) string {
+	return fmt.Sprintf("%s %.2f", strings.ToUpper(currency), float64(cents)/100)
 }
 
 // decrementOrderStock lowers stock for each purchased line. D1 has no

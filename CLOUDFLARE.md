@@ -237,6 +237,37 @@ Checkout collects a shipping address and is restricted to **US** destinations
 stored on `ShopOrders`. An oversold order is voided when its PaymentIntent is
 still uncaptured, otherwise refunded, and moves to `refunded`.
 
+## Cloudflare Email Service (buyer order links)
+
+After a payment is recorded, the server emails the buyer a link to their order.
+The Go container sends through the Email Service REST API (a plain HTTPS call),
+not the Worker `send_email` binding. Set the secret:
+
+```sh
+npx wrangler secret put EMAIL_API_TOKEN
+```
+
+The token is a Cloudflare API token with permission to send email. The
+non-secret values are vars: `EMAIL_ACCOUNT_ID` (the same value as
+`D1_ACCOUNT_ID`), `EMAIL_FROM` (for example `orders@thomhuang.com`),
+`EMAIL_FROM_NAME`, and optional `PUBLIC_SITE_URL` (defaults to the first
+`CLIENT_ORIGIN_URLS` entry; this is the origin of the emailed link). Order email
+stays silently disabled unless `EMAIL_ACCOUNT_ID`, `EMAIL_FROM`, and
+`EMAIL_API_TOKEN` are all set.
+
+The sender domain must be onboarded before mail reaches arbitrary buyers:
+until then Email Sending can only deliver to verified destination addresses.
+Onboard it in the dashboard (**Compute & AI > Email Service > Email Sending >
+Onboard Domain**), which adds SPF and DKIM records, or via
+`npx wrangler email sending enable thomhuang.com`. Emails are sent from
+`EMAIL_FROM`, so the domain in that address must be the onboarded one.
+
+Each paid order gets one random token; only its SHA-256 hash is stored
+(`ShopOrders.ViewTokenHash`). `GET /shop/orders/view/{token}` returns the full
+order (customer and shipping fields) because the token is the credential, and is
+marked `no-store`/`no-referrer`/`noindex`. Existing orders have no token, and a
+failed send is not retried.
+
 ## Notes and trade-offs
 
 - D1 does not support interactive transactions, so `Model.Insert`/`Model.Update`

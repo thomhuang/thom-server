@@ -102,7 +102,7 @@ Pull requests should include a brief description, the routes or models changed, 
 
 ## Security & Configuration Tips
 
-Do not commit secrets, real `.env.local`/`.dev.vars` values, JWT secrets, or production password hashes. Cloudflare deployments use Worker secrets (`ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, `JWT_SECRET`, `CF_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`) and vars (`CLIENT_ORIGIN_URLS`, `SECURE_COOKIES`, `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_PUBLIC_BASE_URL`, `STRIPE_TAX_ENABLED`, `STRIPE_SHIPPING_CENTS`); keep `.env.example` and `.dev.vars.example` placeholder-only. `CF_API_TOKEN` is a D1 API token scoped to the account and must never be committed. Set `SECURE_COOKIES=true` for HTTPS environments (this also switches the auth cookie to the `__Host-` prefixed name; the cookie is always `SameSite=Lax` because the API is same-origin with the site). `JWT_SECRET` must be at least 32 characters or the server refuses to start. Login rate limiting and logout token revocation live in the app database (`internal/authstate`), so they survive restarts; only the in-memory fallback used by tests resets. `internal/thom.db` is a legacy, gitignored SQLite file the server no longer reads; local runs now mutate the **test** D1 database, so avoid running them with production credentials.
+Do not commit secrets, real `.env.local`/`.dev.vars` values, JWT secrets, or production password hashes. Cloudflare deployments use Worker secrets (`ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, `JWT_SECRET`, `CF_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `EMAIL_API_TOKEN`) and vars (`CLIENT_ORIGIN_URLS`, `SECURE_COOKIES`, `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_PUBLIC_BASE_URL`, `STRIPE_TAX_ENABLED`, `STRIPE_SHIPPING_CENTS`, `EMAIL_ACCOUNT_ID`, `EMAIL_FROM`, `EMAIL_FROM_NAME`, `PUBLIC_SITE_URL`); keep `.env.example` and `.dev.vars.example` placeholder-only. `CF_API_TOKEN` is a D1 API token scoped to the account and must never be committed. Set `SECURE_COOKIES=true` for HTTPS environments (this also switches the auth cookie to the `__Host-` prefixed name; the cookie is always `SameSite=Lax` because the API is same-origin with the site). `JWT_SECRET` must be at least 32 characters or the server refuses to start. Login rate limiting and logout token revocation live in the app database (`internal/authstate`), so they survive restarts; only the in-memory fallback used by tests resets. `internal/thom.db` is a legacy, gitignored SQLite file the server no longer reads; local runs now mutate the **test** D1 database, so avoid running them with production credentials.
 
 **Local secret files.** `.env*` and `.dev.vars*` (except the `.example` files) are gitignored and denied to the `read` tool via global OpenCode permissions. Do not work around that with `grep` or shell commands — a `grep '^CF_API_TOKEN=.+' .env*` prints the secret into the transcript. Read the `.example` files for the shape of the config instead.
 
@@ -144,6 +144,20 @@ list live in `D:\Repos\BOARD.md`; this section only records durable gotchas.
   id can leak via browser history, shared links, or logs, so it is not sufficient
   authorization for PII. The full order (with PII) is only returned by the
   authenticated `GET /shop/orders` admin list.
+- **Buyer order-view links (magic link) — code done, infra pending.** On
+  `checkout.session.completed` the webhook mints a random 32-byte token, stores
+  **only its SHA-256 hash** (`ShopOrders.ViewTokenHash`, added by
+  `ensureShopOrderColumns`), and emails
+  `<PUBLIC_SITE_URL>/shop/order/view?token=<raw>` via Cloudflare Email Service.
+  `GET /shop/orders/view/{token}` returns the **full order** (customer + ship
+  fields) because the token is the credential; it is `no-store`, `no-referrer`,
+  and `noindex`. The raw token exists only in the email. Mail is best-effort:
+  a send failure is logged and the webhook still returns `200` (the payment is
+  already recorded). **No backfill** — orders paid before this change have no
+  token. **No resend** — a failed send is not retried. Prerequisite before it
+  works live: onboard `thomhuang.com` for Email Sending (adds SPF/DKIM) and set
+  the `EMAIL_API_TOKEN` Worker secret on both Workers; order email is silently
+  disabled until `EMAIL_ACCOUNT_ID`, `EMAIL_FROM`, and the token are all set.
 - **`POST /shop/checkout` is rate-limited per client** (10 per 10 minutes,
   fixed window) by `internal/server/ratelimit.go`, keyed on `CF-Connecting-IP`.
   The limiter is in-memory, so it resets when the container restarts and is not

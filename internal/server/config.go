@@ -21,6 +21,7 @@ type Config struct {
 	R2                r2.Config
 	R2PublicBaseURL   string
 	Stripe            StripeConfig
+	Email             EmailConfig
 }
 
 type StripeConfig struct {
@@ -30,6 +31,19 @@ type StripeConfig struct {
 	ShippingCents int
 	SuccessURL    string
 	CancelURL     string
+}
+
+// EmailConfig is the Cloudflare Email Service sending configuration. Order
+// email stays disabled unless the account, API token, and from address are all
+// set.
+type EmailConfig struct {
+	APIToken  string
+	AccountID string
+	From      string
+	FromName  string
+	// SiteURL is where an emailed order link points. It defaults to the first
+	// client origin, so no extra variable is required.
+	SiteURL string
 }
 
 // minJWTSecretLength is the shortest signing secret the server accepts. A short
@@ -117,6 +131,25 @@ func StripeConfigFromEnv(clientOrigins []string) StripeConfig {
 		ShippingCents: shippingCents,
 		SuccessURL:    origin + "/shop/order?session_id={CHECKOUT_SESSION_ID}",
 		CancelURL:     origin + "/shop",
+	}
+}
+
+// EmailConfigFromEnv reads the Cloudflare Email Service sending settings. The
+// account id is the Cloudflare account the Email Sending domain belongs to; the
+// site URL is where an emailed order link points and defaults to the first
+// client origin.
+func EmailConfigFromEnv(clientOrigins []string) EmailConfig {
+	siteURL := strings.TrimSuffix(strings.TrimSpace(os.Getenv("PUBLIC_SITE_URL")), "/")
+	if siteURL == "" && len(clientOrigins) > 0 {
+		siteURL = strings.TrimSuffix(strings.TrimSpace(clientOrigins[0]), "/")
+	}
+
+	return EmailConfig{
+		APIToken:  strings.TrimSpace(os.Getenv("EMAIL_API_TOKEN")),
+		AccountID: strings.TrimSpace(os.Getenv("EMAIL_ACCOUNT_ID")),
+		From:      strings.TrimSpace(os.Getenv("EMAIL_FROM")),
+		FromName:  strings.TrimSpace(os.Getenv("EMAIL_FROM_NAME")),
+		SiteURL:   siteURL,
 	}
 }
 

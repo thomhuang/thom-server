@@ -136,6 +136,7 @@ func (m *Model) EnsureSchema() error {
 			ShipState TEXT NOT NULL DEFAULT '',
 			ShipPostalCode TEXT NOT NULL DEFAULT '',
 			ShipCountry TEXT NOT NULL DEFAULT '',
+			ViewTokenHash TEXT NOT NULL DEFAULT '',
 			RefundedAt TEXT NOT NULL DEFAULT '',
 			RefundReason TEXT NOT NULL DEFAULT '',
 			AmountTotalCents INTEGER NOT NULL DEFAULT 0,
@@ -172,10 +173,17 @@ func (m *Model) EnsureSchema() error {
 		return err
 	}
 
-	// BrandID is added by ensureShopItemColumns, so its index can only be
-	// created after the column exists.
-	_, err = m.DB.Exec(
+	// BrandID is added by ensureShopItemColumns and ViewTokenHash by
+	// ensureShopOrderColumns, so their indexes can only be created after the
+	// columns exist.
+	if _, err = m.DB.Exec(
 		`CREATE INDEX IF NOT EXISTS ShopItemsBrandIndex ON ShopItems(BrandID)`,
+	); err != nil {
+		return err
+	}
+
+	_, err = m.DB.Exec(
+		`CREATE INDEX IF NOT EXISTS ShopOrdersViewTokenIndex ON ShopOrders(ViewTokenHash)`,
 	)
 
 	return err
@@ -205,6 +213,7 @@ func (m *Model) ensureShopOrderColumns() error {
 		{Name: "ShipState", Definition: "ShipState TEXT NOT NULL DEFAULT ''"},
 		{Name: "ShipPostalCode", Definition: "ShipPostalCode TEXT NOT NULL DEFAULT ''"},
 		{Name: "ShipCountry", Definition: "ShipCountry TEXT NOT NULL DEFAULT ''"},
+		{Name: "ViewTokenHash", Definition: "ViewTokenHash TEXT NOT NULL DEFAULT ''"},
 		{Name: "RefundedAt", Definition: "RefundedAt TEXT NOT NULL DEFAULT ''"},
 		{Name: "RefundReason", Definition: "RefundReason TEXT NOT NULL DEFAULT ''"},
 	})

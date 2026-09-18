@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	coffeedata "thom-server/internal/coffee"
+	"thom-server/internal/mail"
 	"thom-server/internal/r2"
 	authhttp "thom-server/internal/server/auth"
 	"thom-server/internal/server/response"
@@ -19,6 +20,7 @@ type App struct {
 	shop            *shopdata.Model
 	imageStore      shophttp.ImageStore
 	stripe          shophttp.StripeClient
+	mailer          mail.Sender
 	config          Config
 	responder       response.Responder
 	auth            *authhttp.Handler
@@ -35,6 +37,7 @@ func New(errorLog, infoLog *log.Logger, coffeeModel *coffeedata.Model, shopModel
 		shop:            shopModel,
 		imageStore:      r2.New(config.R2),
 		stripe:          shophttp.NewStripeClient(config.Stripe.SecretKey),
+		mailer:          mail.NewCloudflareSender(config.Email.AccountID, config.Email.APIToken, config.Email.From, config.Email.FromName),
 		config:          config,
 		responder:       response.Responder{ErrorLog: errorLog},
 		checkoutLimiter: newRateLimiter(checkoutRateLimit, checkoutRateWindow),

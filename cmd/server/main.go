@@ -66,6 +66,7 @@ func main() {
 		R2:                r2Config,
 		R2PublicBaseURL:   server.R2PublicBaseURLFromEnv(),
 		Stripe:            server.StripeConfigFromEnv(clientOrigins),
+		Email:             server.EmailConfigFromEnv(clientOrigins),
 	}
 	if err := config.Validate(); err != nil {
 		errorLog.Fatal(err)

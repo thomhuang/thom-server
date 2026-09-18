@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"thom-server/internal/mail"
 	authhttp "thom-server/internal/server/auth"
 	"thom-server/internal/server/response"
 	shopdata "thom-server/internal/shop"
@@ -52,6 +53,8 @@ type Handler struct {
 	publicURL      string
 	stripe         StripeClient
 	stripeSettings StripeSettings
+	mailer         mail.Sender
+	siteURL        string
 	responder      response.Responder
 	infoLog        *log.Logger
 }

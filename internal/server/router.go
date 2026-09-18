@@ -17,7 +17,8 @@ func (app *App) routes() *http.ServeMux {
 			ShippingCents: app.config.Stripe.ShippingCents,
 			SuccessURL:    app.config.Stripe.SuccessURL,
 			CancelURL:     app.config.Stripe.CancelURL,
-		})
+		}).
+		WithMailer(app.mailer, app.config.Email.SiteURL)
 
 	mux.HandleFunc("GET /ping", app.ping)
 
@@ -48,6 +49,7 @@ func (app *App) routes() *http.ServeMux {
 
 	mux.HandleFunc("POST /shop/checkout", app.requireAllowedOrigin(app.limitCheckout(shopHandler.Checkout)))
 	mux.HandleFunc("GET /shop/orders", app.auth.RequireAuth(shopHandler.ListOrders))
+	mux.HandleFunc("GET /shop/orders/view/{token}", shopHandler.GetOrderByViewToken)
 	mux.HandleFunc("GET /shop/orders/{sessionId}", shopHandler.GetOrder)
 	mux.HandleFunc("POST /shop/webhooks/stripe", shopHandler.StripeWebhook)
 
