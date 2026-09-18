@@ -36,7 +36,7 @@
     "D1_ENDPOINT": "",
     "R2_ACCOUNT_ID": "d267f5667d69d024b78f3435e213c77d",
     "R2_BUCKET": "listing-images",
-    "R2_PUBLIC_BASE_URL": "https://thomhuang.com",
+    "R2_PUBLIC_BASE_URL": "https://img.thomhuang.com",
     "STRIPE_TAX_ENABLED": "false",
     "STRIPE_SHIPPING_CENTS": "0"
   }

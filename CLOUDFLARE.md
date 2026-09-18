@@ -201,7 +201,7 @@ only full object paths resolve.
 
 | Environment | Bucket | `R2_PUBLIC_BASE_URL` |
 |---|---|---|
-| production | `listing-images` | `https://thomhuang.com` (custom domain, verified serving) |
+| production | `listing-images` | `https://img.thomhuang.com` (custom domain, verified serving) |
 | test | `listing-images-test` | `https://pub-9a8dcf30844143e6a0515c4feb4987f9.r2.dev` |
 
 `R2_ENDPOINT` is a test-only override; do not set it in a real environment.
