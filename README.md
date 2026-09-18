@@ -41,16 +41,45 @@ Authenticated with the session cookie:
 ## Local development
 
 ```sh
-cp .env.example .env.local   # fill in CF_API_TOKEN (and R2 creds)
-go run ./cmd/server          # API on :4000
+cp .env.example .env.local   # non-secret config only
+.\scripts\dev-op.ps1         # 1Password-injected secrets + go run, API on :4000
 ```
 
 `go run ./cmd/server` loads `.env.local` before reading the environment, and
 existing shell or container variables take precedence. The server has no local
-database: `.env.example` already points `D1_DATABASE_ID` and the R2 values at the
-**test** environment (`wrangler.test.jsonc`), so fill in `CF_API_TOKEN` (and the
-R2 credentials) and you are working against test data. The server refuses to
-start without D1 configured.
+database: `.env.example` points `D1_DATABASE_ID` and the R2 values at the
+**test** environment (`wrangler.test.jsonc`). Keep the **non-secret** values in
+`.env.local` and run the server through `scripts/dev-op.ps1`, which resolves the
+secrets from 1Password. The server refuses to start without D1 configured.
+
+### Secrets (1Password)
+
+Secrets are referenced, never stored in the repo: the committed `.env.op` holds
+`op://` paths for `CF_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `ADMIN_PASSWORD_HASH`, and
+`JWT_SECRET`. `scripts/dev-op.ps1` runs `op run`, so 1Password resolves those
+fields and injects them into the server process only — nothing is written to
+disk and your shell is left untouched.
+
+One-time setup: install the desktop app and CLI (desktop first), then open a new
+shell so `op` is on `PATH`:
+
+```powershell
+winget install --id AgileBits.1Password --accept-package-agreements --accept-source-agreements
+winget install --id AgileBits.1Password.CLI --accept-package-agreements --accept-source-agreements
+```
+
+In the desktop app, enable **Settings → Developer → Integrate with 1Password
+CLI** and Windows Hello, and set a short auto-lock. Then create a vault
+`thom-dev` with one LOGIN item per secret above, titled after the variable, with
+the value in the item's `password` field. `.env.op` maps each variable to
+`op://thom-dev/<item title>/password`.
+
+Run the server with:
+
+```powershell
+.\scripts\dev-op.ps1       # op run + go run ./cmd/server
+```
 
 To run the real container locally instead, use the test Wrangler config so its
 vars point at test:
