@@ -10,8 +10,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 # Install the vulnerability scanner in its own layer so a source change does
-# not force a re-download.
-RUN go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+# not force a re-download. Pinned to the newest release that still supports the
+# Go toolchain in this base image (v1.8.0 requires Go 1.26).
+RUN go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 
 # copy the source code, .dockerignore handling irrelevant files
 COPY . ./
