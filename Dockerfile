@@ -32,7 +32,7 @@ FROM debian:bookworm-slim
 # The server only accepts connections on 4000 and reaches Cloudflare's APIs
 # over HTTPS, so it has no reason to run as root. 10001 is an unprivileged
 # uid/gid that needs no /etc/passwd entry, and /app is owned by it so the
-# optional SQLite fallback can still create its file.
+# working directory is writable.
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates \
 	&& rm -rf /var/lib/apt/lists/* \

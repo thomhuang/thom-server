@@ -1,19 +1,24 @@
-# Copy to .dev.vars for local `wrangler dev` (requires Docker running).
-# These are passed to the Go container as environment variables.
+# Copy to .dev.vars for local `wrangler dev` (requires Docker running). Run it
+# against the test config so local requests never reach production:
+#
+#   npx wrangler dev -c wrangler.test.jsonc
+#
+# The D1/R2 values below are the test environment's and override the config's
+# vars; only the credentials are secrets. For plain `go run`, use .env.local.
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD_HASH=$2y$12$replace-with-a-bcrypt-password-hash
 JWT_SECRET=replace-with-a-long-random-secret
 CLIENT_ORIGIN_URLS=http://localhost:3000,http://localhost:3001
 SECURE_COOKIES=false
-D1_ACCOUNT_ID=
-D1_DATABASE_ID=
+D1_ACCOUNT_ID=d267f5667d69d024b78f3435e213c77d
+D1_DATABASE_ID=de8610e7-76af-427b-a228-a742babcb989
 D1_ENDPOINT=
 CF_API_TOKEN=
-R2_ACCOUNT_ID=
-R2_BUCKET=
+R2_ACCOUNT_ID=d267f5667d69d024b78f3435e213c77d
+R2_BUCKET=listing-images-test
 R2_ACCESS_KEY_ID=
 R2_SECRET_ACCESS_KEY=
-R2_PUBLIC_BASE_URL=
+R2_PUBLIC_BASE_URL=https://pub-9a8dcf30844143e6a0515c4feb4987f9.r2.dev
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 STRIPE_TAX_ENABLED=false

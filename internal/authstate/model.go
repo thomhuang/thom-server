@@ -1,6 +1,6 @@
 // Package authstate persists the auth decisions that must outlive a process:
 // login throttling and revoked session tokens. It runs on the same database as
-// the rest of the app (SQLite locally, Cloudflare D1 in deployment), so a
+// the rest of the app (Cloudflare D1 at runtime, in-memory SQLite in tests), so a
 // lockout is not forgotten and a revoked token stays revoked across restarts
 // and across instances.
 package authstate

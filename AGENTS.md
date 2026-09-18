@@ -72,20 +72,19 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## Project Structure & Module Organization
 
-This is a small Go 1.25 HTTP API server. The executable entrypoint lives in `cmd/server/main.go`; HTTP app wiring lives in `internal/server`. Shared server infrastructure is in `internal/server` and `internal/server/response`, auth HTTP behavior is in `internal/server/auth`, and coffee HTTP handlers are in `internal/server/coffee`. Domain and data-access code lives in `internal/coffee`, with shared data-layer errors in `internal/data` and the Cloudflare D1 `database/sql` driver in `internal/d1`. Local runs use the SQLite database at `internal/thom.db`, which is gitignored (`*.db`) and created on demand — the schema is applied by `EnsureSchema` at startup. Production runs the same binary as a Cloudflare Container (`Dockerfile`) fronted by `worker/index.js` and `wrangler.jsonc`, with Cloudflare D1 as the database; see `CLOUDFLARE.md`.
+This is a small Go 1.25 HTTP API server. The executable entrypoint lives in `cmd/server/main.go`; HTTP app wiring lives in `internal/server`. Shared server infrastructure is in `internal/server` and `internal/server/response`, auth HTTP behavior is in `internal/server/auth`, and coffee HTTP handlers are in `internal/server/coffee`. Domain and data-access code lives in `internal/coffee`, with shared data-layer errors in `internal/data` and the Cloudflare D1 `database/sql` driver in `internal/d1`. The server always talks to Cloudflare D1 — there is no local database — and the schema is applied by `EnsureSchema` at startup. Test and production run the same binary as a Cloudflare Container (`Dockerfile`) fronted by `worker/index.js`, selected by `wrangler.jsonc` (production) and `wrangler.test.jsonc` (test). Local development points at the **test** D1 database and test R2 bucket; only the Go unit tests use in-memory SQLite. See `CLOUDFLARE.md`.
 
 ## Build, Test, and Development Commands
 
-- `go run ./cmd/server`: start the API locally on `:4000` against SQLite.
+- `go run ./cmd/server`: start the API locally on `:4000` against the test D1 database.
 - `go run ./cmd/server -addr=":8080"`: run on a different port.
-- `go run ./cmd/server -db-path="./internal/thom.db"`: run against a specific SQLite database.
-- `go test ./...`: run all Go tests.
+- `go test ./...`: run all Go tests (in-memory SQLite, no C toolchain needed).
 - `go test ./internal/d1/`: run the D1 driver tests only.
 - `go build ./cmd/server`: compile the server package.
 - `npx wrangler deploy`: build and deploy the Cloudflare Container and Worker (see `CLOUDFLARE.md`).
 - `npx wrangler deploy -c wrangler.test.jsonc`: build and deploy the test Worker (`thom-server-test`).
 
-For local authenticated routes, copy `.env.example` to `.env.local` and replace the placeholder auth values. `go run ./cmd/server` loads `.env.local` before reading configuration, while existing shell or container variables take precedence. The server uses Cloudflare D1 when `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, and `CF_API_TOKEN` are set, and the local SQLite file otherwise. Because `modernc.org/sqlite` is a pure-Go driver, local runs and tests need no C toolchain; the D1 path does not either.
+For local authenticated routes, copy `.env.example` to `.env.local` and fill in `CF_API_TOKEN` plus the R2 credentials; `.env.example` already points `D1_DATABASE_ID`, `R2_BUCKET`, and `R2_PUBLIC_BASE_URL` at the test environment. `go run ./cmd/server` loads `.env.local` before reading configuration, while existing shell or container variables take precedence. The server uses Cloudflare D1 and refuses to start unless `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, and `CF_API_TOKEN` are all set — there is no local SQLite fallback. Because `modernc.org/sqlite` is a pure-Go driver, the in-memory unit tests need no C toolchain; the D1 path does not either.
 
 ## Coding Style & Naming Conventions
 
@@ -93,7 +92,7 @@ Use standard Go formatting: run `gofmt` on changed `.go` files before committing
 
 ## Testing Guidelines
 
-Place tests next to the code they cover using Go's standard `testing` package and name files `*_test.go`. Prefer table-driven tests for handlers, auth/config helpers, and model methods. For database behavior, use temporary SQLite databases and the existing test helper patterns instead of mutating `internal/thom.db`; the D1 driver tests use a fake HTTP endpoint and need no CGO. Run `go test ./...` before opening a PR.
+Place tests next to the code they cover using Go's standard `testing` package and name files `*_test.go`. Prefer table-driven tests for handlers, auth/config helpers, and model methods. For database behavior, use in-memory SQLite databases and the existing test helper patterns; the D1 driver tests use a fake HTTP endpoint and need no CGO. Run `go test ./...` before opening a PR.
 
 ## Commit & Pull Request Guidelines
 
@@ -103,7 +102,7 @@ Pull requests should include a brief description, the routes or models changed, 
 
 ## Security & Configuration Tips
 
-Do not commit secrets, real `.env.local`/`.dev.vars` values, JWT secrets, or production password hashes. Cloudflare deployments use Worker secrets (`ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, `JWT_SECRET`, `CF_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`) and vars (`CLIENT_ORIGIN_URLS`, `SECURE_COOKIES`, `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_PUBLIC_BASE_URL`, `STRIPE_TAX_ENABLED`, `STRIPE_SHIPPING_CENTS`); keep `.env.example` and `.dev.vars.example` placeholder-only. `CF_API_TOKEN` is a D1 API token scoped to the account and must never be committed. Set `SECURE_COOKIES=true` for HTTPS environments (this also switches the auth cookie to the `__Host-` prefixed name; the cookie is always `SameSite=Lax` because the API is same-origin with the site). `JWT_SECRET` must be at least 32 characters or the server refuses to start. Login rate limiting and logout token revocation live in the app database (`internal/authstate`), so they survive restarts; only the in-memory fallback used by tests resets. Treat `internal/thom.db` as application data (it is gitignored): use `DB_PATH` to point local runs at a scratch file, and avoid accidental local-only mutations.
+Do not commit secrets, real `.env.local`/`.dev.vars` values, JWT secrets, or production password hashes. Cloudflare deployments use Worker secrets (`ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, `JWT_SECRET`, `CF_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`) and vars (`CLIENT_ORIGIN_URLS`, `SECURE_COOKIES`, `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_PUBLIC_BASE_URL`, `STRIPE_TAX_ENABLED`, `STRIPE_SHIPPING_CENTS`); keep `.env.example` and `.dev.vars.example` placeholder-only. `CF_API_TOKEN` is a D1 API token scoped to the account and must never be committed. Set `SECURE_COOKIES=true` for HTTPS environments (this also switches the auth cookie to the `__Host-` prefixed name; the cookie is always `SameSite=Lax` because the API is same-origin with the site). `JWT_SECRET` must be at least 32 characters or the server refuses to start. Login rate limiting and logout token revocation live in the app database (`internal/authstate`), so they survive restarts; only the in-memory fallback used by tests resets. `internal/thom.db` is a legacy, gitignored SQLite file the server no longer reads; local runs now mutate the **test** D1 database, so avoid running them with production credentials.
 
 **Local secret files.** `.env*` and `.dev.vars*` (except the `.example` files) are gitignored and denied to the `read` tool via global OpenCode permissions. Do not work around that with `grep` or shell commands — a `grep '^CF_API_TOKEN=.+' .env*` prints the secret into the transcript. Read the `.example` files for the shape of the config instead.
 

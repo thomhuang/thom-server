@@ -3,15 +3,17 @@
 The Go server is unchanged in shape (`cmd/`, `internal/`, `database/sql`). Only the
 database backend and the deployment glue change:
 
-- **SQLite → Cloudflare D1.** `internal/server/database.go` opens D1 when
-  `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, and `CF_API_TOKEN` are set, otherwise it opens
-  the local SQLite file exactly as before. `internal/d1` is a small `database/sql`
-  driver that talks to the D1 HTTP API.
+- **SQLite → Cloudflare D1.** `internal/server/database.go` always opens D1
+  from `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, and `CF_API_TOKEN`; there is no local
+  database fallback. `internal/d1` is a small `database/sql` driver that talks
+  to the D1 HTTP API.
 - **Container + Worker shim.** `wrangler.jsonc` + `worker/index.js` run the Go
   binary (`Dockerfile`) as a single Cloudflare Container and forward requests to it.
   All application logic stays in Go.
 
-Local development is unchanged: `go run ./cmd/server` uses `DB_PATH`/SQLite.
+Local development points at the **test** database and test R2 bucket; see
+[Local development](#local-development). The only SQLite left is the in-memory
+database the Go unit tests create for themselves.
 
 ## Environments
 
@@ -29,12 +31,13 @@ Secrets are per-Worker, so set them against the matching config file:
 npx wrangler secret put CF_API_TOKEN -c wrangler.test.jsonc
 ```
 
-As of 2026-09-18 the **test** Worker is missing `CF_API_TOKEN`, so it falls back
-to the container's local SQLite file instead of `thom-db-test` (the D1 test
-database still has no tables). Set that secret before treating test as a
-faithful mirror of production. Production pushes are also not currently
-producing Workers Builds, so the deployed `thom-server` is older than `main` —
-deploy manually (below) until the build trigger is fixed.
+Verified 2026-09-18: the **test** Worker has `CF_API_TOKEN` set (a
+`secret_text` binding) and its plain-text vars point at `thom-db-test` and
+`listing-images-test`, so the no-fallback server runs against the test database.
+`thom-db-test` already holds the app tables; a container start applies any
+missing tables or columns through `EnsureSchema`. Production pushes are also not
+currently producing Workers Builds, so the deployed `thom-server` is older than
+`main` — deploy manually (below) until the build trigger is fixed.
 
 ## Prerequisites
 
@@ -114,8 +117,9 @@ The first deploy can take a few minutes to provision the container.
 
 ## 6. Load your existing coffee data
 
-The tables are created automatically on first container start. Trigger it once,
-then import the local rows:
+The tables are created automatically on first container start. Trigger it once.
+If you still have the legacy `internal/thom.db` SQLite file, export and import
+its rows (the server itself no longer reads it):
 
 ```sh
 curl https://www.thomhuang.com/api/coffee
@@ -243,10 +247,20 @@ cancel redirects are derived from the first `CLIENT_ORIGIN_URLS` entry
 ## Local development
 
 ```sh
-cp .env.example .env.local   # fill in the auth values
-go run ./cmd/server          # SQLite, unchanged
-go test ./...
+cp .env.example .env.local   # fill in CF_API_TOKEN (and R2 creds)
+go run ./cmd/server          # test D1 + test R2, API on :4000
+go test ./...                # in-memory SQLite
 ```
 
-`wrangler dev` (which runs the container) needs Docker; the D1 driver has its own
-tests: `go test ./internal/d1/`.
+`.env.example` already points `D1_DATABASE_ID`, `R2_BUCKET`, and
+`R2_PUBLIC_BASE_URL` at the test environment, so local runs use test data. The
+server refuses to start without D1 configured.
+
+To run the container locally instead, use the test Wrangler config (Docker
+required), with secrets from `.dev.vars`:
+
+```sh
+npx wrangler dev -c wrangler.test.jsonc
+```
+
+The D1 driver has its own tests: `go test ./internal/d1/`.

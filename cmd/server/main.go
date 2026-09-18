@@ -11,8 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	_ "modernc.org/sqlite"
-
 	"thom-server/internal/authstate"
 	"thom-server/internal/coffee"
 	"thom-server/internal/server"
@@ -28,17 +26,10 @@ func main() {
 	}
 
 	addr := flag.String("addr", ":4000", "HTTP network address")
-	dbPath := flag.String("db-path", server.DBPathFromEnv(), "SQLite database path")
 
 	flag.Parse()
 
-	if !server.UsingD1() {
-		if err := server.PrepareDBFile(*dbPath, server.DefaultDBPath); err != nil {
-			errorLog.Fatal(err)
-		}
-	}
-
-	appDB, err := server.OpenAppDB(*dbPath)
+	appDB, err := server.OpenAppDB()
 	if err != nil {
 		errorLog.Fatal(err)
 	}

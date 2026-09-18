@@ -10,8 +10,9 @@ The server runs on Cloudflare: the Go binary runs as a Cloudflare Container and
 stores data in Cloudflare D1. Two environments deploy from this repository —
 production (`wrangler.jsonc` → `thom-server`) and test
 (`wrangler.test.jsonc` → `thom-server-test`). See [CLOUDFLARE.md](CLOUDFLARE.md)
-for setup, secrets, data import, and deployment. Local development and tests
-continue to use SQLite.
+for setup, secrets, data import, and deployment. There is no local database:
+local development points at the test D1 database and test R2 bucket, and Go
+tests use in-memory SQLite.
 
 ```sh
 npx wrangler deploy                        # production
@@ -40,18 +41,26 @@ Authenticated with the session cookie:
 ## Local development
 
 ```sh
-cp .env.example .env.local   # fill in the auth values
+cp .env.example .env.local   # fill in CF_API_TOKEN (and R2 creds)
 go run ./cmd/server          # API on :4000
 ```
 
-The server defaults to the SQLite database at `internal/thom.db` (gitignored and
-created on demand). Use `DB_PATH` or `go run ./cmd/server
--db-path="./internal/thom.db"` to point at it explicitly.
-`go run ./cmd/server` loads `.env.local` before reading those variables; existing
-shell or container environment variables take precedence.
+`go run ./cmd/server` loads `.env.local` before reading the environment, and
+existing shell or container variables take precedence. The server has no local
+database: `.env.example` already points `D1_DATABASE_ID` and the R2 values at the
+**test** environment (`wrangler.test.jsonc`), so fill in `CF_API_TOKEN` (and the
+R2 credentials) and you are working against test data. The server refuses to
+start without D1 configured.
+
+To run the real container locally instead, use the test Wrangler config so its
+vars point at test:
 
 ```sh
-go test ./...           # all tests (local SQLite, no C toolchain needed)
+npx wrangler dev -c wrangler.test.jsonc   # needs Docker and .dev.vars
+```
+
+```sh
+go test ./...           # in-memory SQLite, no C toolchain needed
 go test ./internal/d1/  # D1 driver tests only
 go build ./cmd/server
 ```
@@ -65,8 +74,7 @@ JWT cookie auth is configured with environment variables:
 - `JWT_SECRET`: long random secret used to sign auth cookies.
 - `CLIENT_ORIGIN_URLS`: comma-separated frontend origins allowed to send cookies.
 - `SECURE_COOKIES`: set to `true` in HTTPS environments; this also switches the auth cookie to the `__Host-` prefixed name. The cookie is always `SameSite=Lax`, since the API is same-origin with the site.
-- `DB_PATH`: local SQLite database path. When it points at a new path, the server seeds it by copying `internal/thom.db` if that file exists on disk. `internal/thom.db` itself is gitignored and created on demand, so a fresh clone starts empty.
-- `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, `CF_API_TOKEN`, `D1_ENDPOINT`: when the first three are set, the server uses Cloudflare D1 instead of SQLite. `D1_ENDPOINT` defaults to the public Cloudflare API.
+- `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, `CF_API_TOKEN`, `D1_ENDPOINT`: required. The server only talks to Cloudflare D1. `D1_DATABASE_ID` selects test or production and `D1_ENDPOINT` defaults to the public Cloudflare API. `CF_API_TOKEN` is a secret and is never committed.
 
 Generate a bcrypt password hash with:
 
