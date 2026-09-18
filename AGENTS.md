@@ -118,9 +118,23 @@ list live in `D:\Repos\BOARD.md`; this section only records durable gotchas.
 - **Two environments, one repo.** Production is `wrangler.jsonc` →
   `thom-server`; test is `wrangler.test.jsonc` → `thom-server-test`. Secrets are
   per-Worker, so a value set for one is absent on the other. See `CLOUDFLARE.md`.
-- **Known shop follow-ups:** checkout does not collect a shipping address; only
-  `checkout.session.completed` is handled (async payment methods leave orders
-  `pending`); oversold-at-webhook is logged only (no refund).
+- **Known shop follow-ups:** only `checkout.session.completed` is handled (async
+  payment methods leave orders `pending`). Checkout now collects a **US-only**
+  shipping address (`CollectedInformation.ShippingDetails`), and an oversold
+  webhook is voided if the PaymentIntent is uncaptured, otherwise refunded, with
+  the order moved to `refunded`.
+- **Orders API (2026-09-18).** `GET /shop/orders` is paginated:
+  `?limit=<1..100, default 20>&cursor=<last order id>`, response
+  `{ "orders": [...], "nextCursor": "<id>|" }` (`""` means no more pages).
+  `cursor` is the keyset of the previous page, not an offset. This replaced the
+  old bare-array response, so the website admin page must send/consume the
+  wrapper. Order `status` is one of `pending`, `paid`, `refund_pending`,
+  `refunded`. `ShopOrders` carries structured `ShipName`/`ShipLine1`/`ShipLine2`/
+  `ShipCity`/`ShipState`/`ShipPostalCode`/`ShipCountry` (plus the legacy formatted
+  `ShippingAddress`), and `RefundedAt`/`RefundReason`; `ensureShopOrderColumns`
+  adds them to existing databases. A `refund_pending` order means a refund was
+  requested but Stripe had not confirmed it; Stripe webhook redelivery retries
+  it, and a `refund_pending` order with no payment intent is left for an operator.
 - **`POST /shop/checkout` is rate-limited per client** (10 per 10 minutes,
   fixed window) by `internal/server/ratelimit.go`, keyed on `CF-Connecting-IP`.
   The limiter is in-memory, so it resets when the container restarts and is not

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,10 @@ type fakeStripeClient struct {
 	lastParams CheckoutParams
 	session    *CheckoutSession
 	err        error
+
+	refundErr             error
+	refundPaymentIntents  []string
+	refundIdempotencyKeys []string
 }
 
 func (f *fakeStripeClient) CreateCheckoutSession(_ context.Context, params CheckoutParams) (*CheckoutSession, error) {
@@ -35,6 +40,13 @@ func (f *fakeStripeClient) CreateCheckoutSession(_ context.Context, params Check
 	}
 
 	return &CheckoutSession{ID: "cs_test_123", URL: "https://checkout.stripe.com/c/pay/cs_test_123"}, nil
+}
+
+func (f *fakeStripeClient) RefundPayment(_ context.Context, paymentIntentID string, idempotencyKey string) error {
+	f.refundPaymentIntents = append(f.refundPaymentIntents, paymentIntentID)
+	f.refundIdempotencyKeys = append(f.refundIdempotencyKeys, idempotencyKey)
+
+	return f.refundErr
 }
 
 func TestCheckoutUsesDatabasePriceAndRecordsPendingOrder(t *testing.T) {
@@ -184,6 +196,9 @@ func TestStripeWebhookMarksPaidAndDecrementsStock(t *testing.T) {
 	if order.CustomerEmail != "buyer@example.com" {
 		t.Fatalf("email = %q, want buyer@example.com", order.CustomerEmail)
 	}
+	if order.ShipName != "Buyer" {
+		t.Fatalf("shipName = %q, want the customer name fallback", order.ShipName)
+	}
 
 	item, err := handler.shop.GetItemByID(1)
 	if err != nil {
@@ -225,6 +240,250 @@ func TestStripeWebhookIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestStripeWebhookRefundsOversoldOrder(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	stripeClient := &fakeStripeClient{}
+	handler.WithStripe(stripeClient, StripeSettings{WebhookSecret: testWebhookSecret})
+
+	// Item 1 has stock 5 and sells 2 successfully; item 2 has stock 10 and
+	// cannot sell 999. The oversold line must undo the first line and refund.
+	if _, err := handler.shop.InsertPendingOrder("cs_test_oversold", &shopdata.Order{
+		Currency: "usd",
+		Lines: []*shopdata.OrderLine{
+			{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 2},
+			{ItemID: "2", Title: "Test beans", UnitPriceCents: 2200, Quantity: 999},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := checkoutCompletedPayloadForSession(t, &stripe.CheckoutSession{
+		ID:            "cs_test_oversold",
+		AmountTotal:   4400,
+		Currency:      "usd",
+		PaymentIntent: &stripe.PaymentIntent{ID: "pi_test_oversold"},
+		CustomerDetails: &stripe.CheckoutSessionCustomerDetails{
+			Email: "buyer@example.com",
+			Name:  "Buyer",
+		},
+	})
+
+	recorder := httptest.NewRecorder()
+	handler.StripeWebhook(recorder, webhookRequest(t, payload, testWebhookSecret))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	order, err := handler.shop.GetOrderBySessionID("cs_test_oversold")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != shopdata.OrderStatusRefunded {
+		t.Fatalf("status = %q, want refunded", order.Status)
+	}
+	if len(stripeClient.refundPaymentIntents) != 1 || stripeClient.refundPaymentIntents[0] != "pi_test_oversold" {
+		t.Fatalf("refund payment intents = %v, want [pi_test_oversold]", stripeClient.refundPaymentIntents)
+	}
+	wantKey := "cs_test_oversold:oversold"
+	if len(stripeClient.refundIdempotencyKeys) != 1 || stripeClient.refundIdempotencyKeys[0] != wantKey {
+		t.Fatalf("refund idempotency keys = %v, want [%s]", stripeClient.refundIdempotencyKeys, wantKey)
+	}
+
+	mug, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mug.Stock != 5 {
+		t.Fatalf("mug stock = %d, want 5 after restoring the applied line", mug.Stock)
+	}
+	beans, err := handler.shop.GetItemByID(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beans.Stock != 10 {
+		t.Fatalf("beans stock = %d, want 10 untouched", beans.Stock)
+	}
+}
+
+func TestStripeWebhookRefundErrorLeavesOrderRefundPending(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	stripeClient := &fakeStripeClient{refundErr: errors.New("stripe unavailable")}
+	handler.WithStripe(stripeClient, StripeSettings{WebhookSecret: testWebhookSecret})
+
+	if _, err := handler.shop.InsertPendingOrder("cs_test_refund_fail", &shopdata.Order{
+		Currency: "usd",
+		Lines:    []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 99}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := checkoutCompletedPayloadForSession(t, &stripe.CheckoutSession{
+		ID:            "cs_test_refund_fail",
+		AmountTotal:   1800,
+		Currency:      "usd",
+		PaymentIntent: &stripe.PaymentIntent{ID: "pi_test_refund_fail"},
+		CustomerDetails: &stripe.CheckoutSessionCustomerDetails{
+			Email: "buyer@example.com",
+		},
+	})
+
+	recorder := httptest.NewRecorder()
+	handler.StripeWebhook(recorder, webhookRequest(t, payload, testWebhookSecret))
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+
+	order, err := handler.shop.GetOrderBySessionID("cs_test_refund_fail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != shopdata.OrderStatusRefundPending {
+		t.Fatalf("status = %q, want refund_pending", order.Status)
+	}
+}
+
+func TestStripeWebhookPersistsCollectedShippingAddress(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	handler.WithStripe(&fakeStripeClient{}, StripeSettings{WebhookSecret: testWebhookSecret})
+
+	if _, err := handler.shop.InsertPendingOrder("cs_test_shipping", &shopdata.Order{
+		Currency: "usd",
+		Lines:    []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The billing address must not be used as the shipping address.
+	payload := checkoutCompletedPayloadForSession(t, &stripe.CheckoutSession{
+		ID:          "cs_test_shipping",
+		AmountTotal: 1800,
+		Currency:    "usd",
+		CustomerDetails: &stripe.CheckoutSessionCustomerDetails{
+			Email: "buyer@example.com",
+			Name:  "Billing Name",
+			Address: &stripe.Address{
+				Line1: "999 Billing Rd",
+				City:  "Billingville",
+			},
+		},
+		CollectedInformation: &stripe.CheckoutSessionCollectedInformation{
+			ShippingDetails: &stripe.CheckoutSessionCollectedInformationShippingDetails{
+				Name: "Ship To Name",
+				Address: &stripe.Address{
+					Line1:      "1 Main St",
+					Line2:      "Apt 2",
+					City:       "Portland",
+					State:      "OR",
+					PostalCode: "97201",
+					Country:    "US",
+				},
+			},
+		},
+	})
+
+	recorder := httptest.NewRecorder()
+	handler.StripeWebhook(recorder, webhookRequest(t, payload, testWebhookSecret))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	order, err := handler.shop.GetOrderBySessionID("cs_test_shipping")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.ShipName != "Ship To Name" {
+		t.Fatalf("shipName = %q, want Ship To Name", order.ShipName)
+	}
+	if order.ShipLine1 != "1 Main St" || order.ShipLine2 != "Apt 2" {
+		t.Fatalf("shipping lines = %q/%q, want 1 Main St/Apt 2", order.ShipLine1, order.ShipLine2)
+	}
+	if order.ShipCity != "Portland" || order.ShipState != "OR" ||
+		order.ShipPostalCode != "97201" || order.ShipCountry != "US" {
+		t.Fatalf("shipping fields = %+v, want the collected address", order)
+	}
+	wantAddress := "1 Main St, Apt 2, Portland, OR, 97201, US"
+	if order.ShippingAddress != wantAddress {
+		t.Fatalf("shippingAddress = %q, want %q", order.ShippingAddress, wantAddress)
+	}
+	if order.CustomerEmail != "buyer@example.com" {
+		t.Fatalf("email = %q, want buyer@example.com", order.CustomerEmail)
+	}
+}
+
+func TestListOrdersPaginates(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	for _, sessionID := range []string{"cs_page_1", "cs_page_2", "cs_page_3"} {
+		if _, err := handler.shop.InsertPendingOrder(sessionID, &shopdata.Order{
+			Currency: "usd",
+			Lines:    []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 1}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first := serve(handler.ListOrders, http.MethodGet, "/shop/orders?limit=2", "")
+	if first.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", first.Code, http.StatusOK)
+	}
+
+	var firstPage orderListResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(firstPage.Orders) != 2 {
+		t.Fatalf("orders = %d, want 2", len(firstPage.Orders))
+	}
+	if firstPage.Orders[0].StripeSessionID != "cs_page_3" || firstPage.Orders[1].StripeSessionID != "cs_page_2" {
+		t.Fatalf(
+			"order sessions = %q/%q, want newest first",
+			firstPage.Orders[0].StripeSessionID,
+			firstPage.Orders[1].StripeSessionID,
+		)
+	}
+	if firstPage.NextCursor == "" {
+		t.Fatal("expected a next cursor")
+	}
+
+	second := serve(handler.ListOrders, http.MethodGet, "/shop/orders?limit=2&cursor="+firstPage.NextCursor, "")
+	if second.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", second.Code, http.StatusOK)
+	}
+
+	var secondPage orderListResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &secondPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPage.Orders) != 1 || secondPage.Orders[0].StripeSessionID != "cs_page_1" {
+		t.Fatalf("second page = %+v, want only cs_page_1", secondPage.Orders)
+	}
+	if secondPage.NextCursor != "" {
+		t.Fatalf("nextCursor = %q, want empty on the last page", secondPage.NextCursor)
+	}
+}
+
+func TestListOrdersRejectsInvalidPagination(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	for _, target := range []string{
+		"/shop/orders?limit=0",
+		"/shop/orders?limit=101",
+		"/shop/orders?limit=abc",
+		"/shop/orders?cursor=abc",
+		"/shop/orders?cursor=0",
+	} {
+		t.Run(target, func(t *testing.T) {
+			rr := serve(handler.ListOrders, http.MethodGet, target, "")
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
 func TestStripeWebhookIgnoresOtherEventTypes(t *testing.T) {
 	handler, _ := newTestHandler(t)
 	handler.WithStripe(&fakeStripeClient{}, StripeSettings{WebhookSecret: testWebhookSecret})
@@ -254,7 +513,7 @@ func webhookRequest(t *testing.T, payload []byte, secret string) *http.Request {
 func checkoutCompletedPayload(t *testing.T, sessionID string, amountTotal int64) []byte {
 	t.Helper()
 
-	session := stripe.CheckoutSession{
+	return checkoutCompletedPayloadForSession(t, &stripe.CheckoutSession{
 		ID:          sessionID,
 		AmountTotal: amountTotal,
 		Currency:    "usd",
@@ -262,7 +521,12 @@ func checkoutCompletedPayload(t *testing.T, sessionID string, amountTotal int64)
 			Email: "buyer@example.com",
 			Name:  "Buyer",
 		},
-	}
+	})
+}
+
+func checkoutCompletedPayloadForSession(t *testing.T, session *stripe.CheckoutSession) []byte {
+	t.Helper()
+
 	sessionJSON, err := json.Marshal(session)
 	if err != nil {
 		t.Fatal(err)

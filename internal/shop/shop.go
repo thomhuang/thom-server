@@ -129,6 +129,15 @@ func (m *Model) EnsureSchema() error {
 			CustomerEmail TEXT NOT NULL DEFAULT '',
 			CustomerName TEXT NOT NULL DEFAULT '',
 			ShippingAddress TEXT NOT NULL DEFAULT '',
+			ShipName TEXT NOT NULL DEFAULT '',
+			ShipLine1 TEXT NOT NULL DEFAULT '',
+			ShipLine2 TEXT NOT NULL DEFAULT '',
+			ShipCity TEXT NOT NULL DEFAULT '',
+			ShipState TEXT NOT NULL DEFAULT '',
+			ShipPostalCode TEXT NOT NULL DEFAULT '',
+			ShipCountry TEXT NOT NULL DEFAULT '',
+			RefundedAt TEXT NOT NULL DEFAULT '',
+			RefundReason TEXT NOT NULL DEFAULT '',
 			AmountTotalCents INTEGER NOT NULL DEFAULT 0,
 			Currency TEXT NOT NULL DEFAULT 'usd',
 			CreatedAt TEXT NOT NULL DEFAULT (datetime('now')),
@@ -159,6 +168,10 @@ func (m *Model) EnsureSchema() error {
 		return err
 	}
 
+	if err = m.ensureShopOrderColumns(); err != nil {
+		return err
+	}
+
 	// BrandID is added by ensureShopItemColumns, so its index can only be
 	// created after the column exists.
 	_, err = m.DB.Exec(
@@ -178,6 +191,22 @@ func (m *Model) ensureShopItemColumns() error {
 		{Name: "PitToPitInches", Definition: "PitToPitInches REAL NOT NULL DEFAULT 0"},
 		{Name: "BackLengthInches", Definition: "BackLengthInches REAL NOT NULL DEFAULT 0"},
 		{Name: "ShoulderInches", Definition: "ShoulderInches REAL NOT NULL DEFAULT 0"},
+	})
+}
+
+// ensureShopOrderColumns adds order shipping and refund columns that predate
+// the current schema.
+func (m *Model) ensureShopOrderColumns() error {
+	return data.EnsureColumns(m.DB, "ShopOrders", []data.Column{
+		{Name: "ShipName", Definition: "ShipName TEXT NOT NULL DEFAULT ''"},
+		{Name: "ShipLine1", Definition: "ShipLine1 TEXT NOT NULL DEFAULT ''"},
+		{Name: "ShipLine2", Definition: "ShipLine2 TEXT NOT NULL DEFAULT ''"},
+		{Name: "ShipCity", Definition: "ShipCity TEXT NOT NULL DEFAULT ''"},
+		{Name: "ShipState", Definition: "ShipState TEXT NOT NULL DEFAULT ''"},
+		{Name: "ShipPostalCode", Definition: "ShipPostalCode TEXT NOT NULL DEFAULT ''"},
+		{Name: "ShipCountry", Definition: "ShipCountry TEXT NOT NULL DEFAULT ''"},
+		{Name: "RefundedAt", Definition: "RefundedAt TEXT NOT NULL DEFAULT ''"},
+		{Name: "RefundReason", Definition: "RefundReason TEXT NOT NULL DEFAULT ''"},
 	})
 }
 

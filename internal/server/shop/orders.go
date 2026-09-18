@@ -28,6 +28,7 @@ var ErrStripeNotConfigured = errors.New("shop: stripe is not configured")
 // so handler tests run without network access.
 type StripeClient interface {
 	CreateCheckoutSession(ctx context.Context, params CheckoutParams) (*CheckoutSession, error)
+	RefundPayment(ctx context.Context, paymentIntentID string, idempotencyKey string) error
 }
 
 // StripeSettings is separate from Config so the handler does not depend on the
@@ -186,15 +187,50 @@ func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ListOrders returns every order, newest first, for the admin view.
+// orderListResponse wraps a page of orders with the cursor for the next page.
+type orderListResponse struct {
+	Orders     []*shopdata.Order `json:"orders"`
+	NextCursor string            `json:"nextCursor"`
+}
+
+// ListOrders returns a page of orders, newest first, for the admin view.
 func (h *Handler) ListOrders(w http.ResponseWriter, r *http.Request) {
-	orders, err := h.shop.ListOrders()
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			h.responder.BadRequest(w)
+			return
+		}
+		limit = parsed
+	}
+
+	cursor := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("cursor")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 {
+			h.responder.BadRequest(w)
+			return
+		}
+		cursor = parsed
+	}
+
+	orders, next, err := h.shop.ListOrdersPage(limit, cursor)
 	if err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}
 
-	if err = h.responder.WriteJSON(w, http.StatusOK, orders, nil); err != nil {
+	nextCursor := ""
+	if next > 0 {
+		nextCursor = strconv.Itoa(next)
+	}
+
+	err = h.responder.WriteJSON(w, http.StatusOK, orderListResponse{
+		Orders:     orders,
+		NextCursor: nextCursor,
+	}, nil)
+	if err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}
@@ -242,13 +278,35 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	paymentIntentID := ""
+	if session.PaymentIntent != nil {
+		paymentIntentID = session.PaymentIntent.ID
+	}
+
 	changed, err := h.shop.MarkOrderPaid(session.ID, paidDetailsFrom(&session))
 	if err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}
 	if !changed {
-		h.infoLog.Printf("STRIPE_WEBHOOK duplicate session=%s", session.ID)
+		// A repeated delivery is normally a no-op. The exception is an order
+		// whose refund was requested but not confirmed: retry it so a Stripe
+		// redelivery can finish the refund.
+		order, loadErr := h.shop.GetOrderBySessionID(session.ID)
+		if loadErr != nil {
+			h.infoLog.Printf("duplicate order %s could not be reloaded: %v", session.ID, loadErr)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if order.Status == shopdata.OrderStatusRefundPending {
+			if err = h.refundOversoldOrder(r.Context(), order, session.ID, paymentIntentID); err != nil {
+				h.responder.ServerError(w, err)
+				return
+			}
+		} else {
+			h.infoLog.Printf("STRIPE_WEBHOOK duplicate session=%s", session.ID)
+		}
+
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -258,8 +316,21 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 	order, err := h.shop.GetOrderBySessionID(session.ID)
 	if err != nil {
 		h.infoLog.Printf("paid order %s could not be reloaded: %v", session.ID, err)
-	} else {
-		h.decrementOrderStock(order)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if h.decrementOrderStock(order) {
+		if _, err = h.shop.MarkOrderRefundPending(session.ID, "oversold"); err != nil {
+			h.infoLog.Printf("failed to mark order %s refund pending: %v", session.ID, err)
+			h.responder.ServerError(w, err)
+			return
+		}
+
+		if err = h.refundOversoldOrder(r.Context(), order, session.ID, paymentIntentID); err != nil {
+			h.responder.ServerError(w, err)
+			return
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -267,8 +338,10 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 
 // decrementOrderStock lowers stock for each purchased line. D1 has no
 // interactive transactions, so the model's conditional UPDATE is what prevents
-// overselling; a line that cannot be satisfied is logged rather than ignored.
-func (h *Handler) decrementOrderStock(order *shopdata.Order) {
+// overselling. It reports whether any line was oversold and, in that case,
+// restores the lines that were already decremented.
+func (h *Handler) decrementOrderStock(order *shopdata.Order) bool {
+	applied := make([]*shopdata.OrderLine, 0, len(order.Lines))
 	for _, line := range order.Lines {
 		ok, err := h.shop.DecrementStock(line.ItemID, line.Quantity)
 		if err != nil {
@@ -277,8 +350,47 @@ func (h *Handler) decrementOrderStock(order *shopdata.Order) {
 		}
 		if !ok {
 			h.infoLog.Printf("order %s oversold item %s", order.ID, line.ItemID)
+			h.restoreStock(order, applied)
+			return true
+		}
+		applied = append(applied, line)
+	}
+
+	return false
+}
+
+// restoreStock puts back the stock an oversold order had already decremented so
+// a partial decrement does not leave listings short.
+func (h *Handler) restoreStock(order *shopdata.Order, applied []*shopdata.OrderLine) {
+	for _, line := range applied {
+		if err := h.shop.RestoreStock(line.ItemID, line.Quantity); err != nil {
+			h.infoLog.Printf("failed to restore stock for order %s item %s: %v", order.ID, line.ItemID, err)
 		}
 	}
+}
+
+// refundOversoldOrder refunds a paid order that could not be fulfilled. With no
+// Stripe client or payment intent it leaves the order refund_pending for an
+// operator to handle manually.
+func (h *Handler) refundOversoldOrder(ctx context.Context, order *shopdata.Order, sessionID, paymentIntentID string) error {
+	if h.stripe == nil || strings.TrimSpace(paymentIntentID) == "" {
+		h.infoLog.Printf("order %s is oversold but has no payment intent to refund", sessionID)
+		return nil
+	}
+
+	if err := h.stripe.RefundPayment(ctx, paymentIntentID, sessionID+":oversold"); err != nil {
+		h.infoLog.Printf("failed to refund oversold order %s: %v", sessionID, err)
+		return err
+	}
+
+	if _, err := h.shop.MarkOrderRefunded(sessionID); err != nil {
+		h.infoLog.Printf("failed to mark order %s refunded: %v", sessionID, err)
+		return err
+	}
+
+	h.infoLog.Printf("STRIPE_REFUND order=%s session=%s paymentIntent=%s", order.ID, sessionID, paymentIntentID)
+
+	return nil
 }
 
 func paidDetailsFrom(session *stripe.CheckoutSession) shopdata.PaidDetails {
@@ -290,7 +402,25 @@ func paidDetailsFrom(session *stripe.CheckoutSession) shopdata.PaidDetails {
 	if session.CustomerDetails != nil {
 		details.CustomerEmail = session.CustomerDetails.Email
 		details.CustomerName = session.CustomerDetails.Name
-		details.ShippingAddress = formatAddress(session.CustomerDetails.Address)
+	}
+
+	// Shipping is collected by Checkout and lives under collected information;
+	// the billing address is deliberately not used as the shipping address.
+	if collected := session.CollectedInformation; collected != nil && collected.ShippingDetails != nil {
+		details.ShipName = collected.ShippingDetails.Name
+		if address := collected.ShippingDetails.Address; address != nil {
+			details.ShipLine1 = address.Line1
+			details.ShipLine2 = address.Line2
+			details.ShipCity = address.City
+			details.ShipState = address.State
+			details.ShipPostalCode = address.PostalCode
+			details.ShipCountry = address.Country
+			details.ShippingAddress = formatAddress(address)
+		}
+	}
+
+	if details.ShipName == "" && session.CustomerDetails != nil {
+		details.ShipName = session.CustomerDetails.Name
 	}
 
 	return details
@@ -350,6 +480,10 @@ func (c *stripeClient) CreateCheckoutSession(ctx context.Context, params Checkou
 		CancelURL:  stripe.String(params.CancelURL),
 		LineItems:  lineItems,
 		Metadata:   map[string]string{"itemId": params.ItemID},
+		// Shipping is US-only.
+		ShippingAddressCollection: &stripe.CheckoutSessionCreateShippingAddressCollectionParams{
+			AllowedCountries: []*string{stripe.String("US")},
+		},
 	}
 	if params.TaxEnabled {
 		sessionParams.AutomaticTax = &stripe.CheckoutSessionCreateAutomaticTaxParams{
@@ -363,6 +497,35 @@ func (c *stripeClient) CreateCheckoutSession(ctx context.Context, params Checkou
 	}
 
 	return &CheckoutSession{ID: session.ID, URL: session.URL}, nil
+}
+
+// RefundPayment refunds the payment behind a Checkout Session. Checkout
+// captures payment immediately, so the refund path is normally taken; only an
+// uncaptured intent is voided instead.
+func (c *stripeClient) RefundPayment(ctx context.Context, paymentIntentID string, idempotencyKey string) error {
+	if c.client == nil {
+		return ErrStripeNotConfigured
+	}
+	if strings.TrimSpace(paymentIntentID) == "" {
+		return errors.New("shop: missing payment intent id")
+	}
+
+	intent, err := c.client.V1PaymentIntents.Retrieve(ctx, paymentIntentID, nil)
+	if err != nil {
+		return err
+	}
+
+	if intent.Status == stripe.PaymentIntentStatusRequiresCapture {
+		_, err = c.client.V1PaymentIntents.Cancel(ctx, paymentIntentID, nil)
+		return err
+	}
+
+	params := &stripe.RefundCreateParams{PaymentIntent: stripe.String(paymentIntentID)}
+	params.SetIdempotencyKey(idempotencyKey)
+
+	_, err = c.client.V1Refunds.Create(ctx, params)
+
+	return err
 }
 
 func lineItem(name, currency string, unitAmountCents int, quantity int64) *stripe.CheckoutSessionCreateLineItemParams {

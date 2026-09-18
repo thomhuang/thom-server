@@ -174,6 +174,66 @@ func TestModelEnsureSchemaAddsBrandColumns(t *testing.T) {
 	}
 }
 
+func TestModelEnsureSchemaAddsOrderColumns(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	db.SetMaxOpenConns(1)
+
+	// A legacy ShopOrders table without shipping or refund columns must migrate
+	// in place, and its existing rows must read back the new columns as empty.
+	legacy := `
+		CREATE TABLE ShopOrders (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			StripeSessionID TEXT NOT NULL UNIQUE,
+			Status TEXT NOT NULL DEFAULT 'pending',
+			CustomerEmail TEXT NOT NULL DEFAULT '',
+			CustomerName TEXT NOT NULL DEFAULT '',
+			ShippingAddress TEXT NOT NULL DEFAULT '',
+			AmountTotalCents INTEGER NOT NULL DEFAULT 0,
+			Currency TEXT NOT NULL DEFAULT 'usd',
+			CreatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+			UpdatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+		INSERT INTO ShopOrders (StripeSessionID, Status) VALUES ('cs_legacy', 'paid');`
+	if _, err = db.Exec(legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	model := &Model{DB: db}
+	if err = model.EnsureSchema(); err != nil {
+		t.Fatalf("EnsureSchema on a legacy ShopOrders failed: %v", err)
+	}
+	if err = model.EnsureSchema(); err != nil {
+		t.Fatalf("second EnsureSchema failed: %v", err)
+	}
+
+	order, err := model.GetOrderBySessionID("cs_legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.ShipName != "" ||
+		order.ShipLine1 != "" ||
+		order.ShipLine2 != "" ||
+		order.ShipCity != "" ||
+		order.ShipState != "" ||
+		order.ShipPostalCode != "" ||
+		order.ShipCountry != "" ||
+		order.RefundedAt != "" ||
+		order.RefundReason != "" {
+		t.Fatalf("legacy order = %+v, want empty shipping and refund fields", order)
+	}
+	if order.Lines == nil {
+		t.Fatal("expected an empty lines slice, not nil")
+	}
+}
+
 func TestModelMeasurementRoundTripPreservesDecimal(t *testing.T) {
 	model := newTestModel(t)
 

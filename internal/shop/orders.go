@@ -2,6 +2,7 @@ package shop
 
 import (
 	"strconv"
+	"strings"
 
 	"thom-server/internal/data"
 )
@@ -11,6 +12,11 @@ const (
 	OrderStatusPending = "pending"
 	// OrderStatusPaid is set once Stripe confirms payment.
 	OrderStatusPaid = "paid"
+	// OrderStatusRefundPending is set when a refund is requested but Stripe has
+	// not confirmed it yet.
+	OrderStatusRefundPending = "refund_pending"
+	// OrderStatusRefunded is set once Stripe confirms the refund.
+	OrderStatusRefunded = "refunded"
 )
 
 // OrderLine snapshots a listing's title and price at purchase time, so editing
@@ -31,9 +37,18 @@ type Order struct {
 	CustomerEmail    string       `json:"customerEmail"`
 	CustomerName     string       `json:"customerName"`
 	ShippingAddress  string       `json:"shippingAddress"`
+	ShipName         string       `json:"shipName"`
+	ShipLine1        string       `json:"shipLine1"`
+	ShipLine2        string       `json:"shipLine2"`
+	ShipCity         string       `json:"shipCity"`
+	ShipState        string       `json:"shipState"`
+	ShipPostalCode   string       `json:"shipPostalCode"`
+	ShipCountry      string       `json:"shipCountry"`
 	AmountTotalCents int          `json:"amountTotalCents"`
 	Currency         string       `json:"currency"`
 	Lines            []*OrderLine `json:"lines"`
+	RefundedAt       string       `json:"refundedAt"`
+	RefundReason     string       `json:"refundReason"`
 	CreatedAt        string       `json:"createdAt"`
 	UpdatedAt        string       `json:"updatedAt"`
 }
@@ -44,6 +59,13 @@ type PaidDetails struct {
 	CustomerEmail    string
 	CustomerName     string
 	ShippingAddress  string
+	ShipName         string
+	ShipLine1        string
+	ShipLine2        string
+	ShipCity         string
+	ShipState        string
+	ShipPostalCode   string
+	ShipCountry      string
 	AmountTotalCents int
 	Currency         string
 }
@@ -91,8 +113,9 @@ func (m *Model) GetOrderBySessionID(sessionID string) (*Order, error) {
 	var orderID int
 
 	err := m.DB.QueryRow(
-		`SELECT id, StripeSessionID, Status, CustomerEmail, CustomerName,
-			ShippingAddress, AmountTotalCents, Currency, CreatedAt, UpdatedAt
+		`SELECT id, StripeSessionID, Status, CustomerEmail, CustomerName, ShippingAddress,
+			ShipName, ShipLine1, ShipLine2, ShipCity, ShipState, ShipPostalCode, ShipCountry,
+			AmountTotalCents, Currency, RefundedAt, RefundReason, CreatedAt, UpdatedAt
 		 FROM ShopOrders
 		 WHERE StripeSessionID = ?`,
 		sessionID,
@@ -103,8 +126,17 @@ func (m *Model) GetOrderBySessionID(sessionID string) (*Order, error) {
 		&order.CustomerEmail,
 		&order.CustomerName,
 		&order.ShippingAddress,
+		&order.ShipName,
+		&order.ShipLine1,
+		&order.ShipLine2,
+		&order.ShipCity,
+		&order.ShipState,
+		&order.ShipPostalCode,
+		&order.ShipCountry,
 		&order.AmountTotalCents,
 		&order.Currency,
+		&order.RefundedAt,
+		&order.RefundReason,
 		&order.CreatedAt,
 		&order.UpdatedAt,
 	)
@@ -123,18 +155,26 @@ func (m *Model) GetOrderBySessionID(sessionID string) (*Order, error) {
 	return order, nil
 }
 
-// ListOrders returns orders newest first with their lines, for the admin view.
-func (m *Model) ListOrders() ([]*Order, error) {
+// ListOrdersPage returns one page of orders newest first with their lines, for
+// the admin view. cursor is 0 for the first page, otherwise it is the id of the
+// last order on the previous page. nextCursor is 0 when there is no further
+// page.
+func (m *Model) ListOrdersPage(limit, cursor int) ([]*Order, int, error) {
 	rows, err := m.DB.Query(
-		`SELECT id, StripeSessionID, Status, CustomerEmail, CustomerName,
-			ShippingAddress, AmountTotalCents, Currency, CreatedAt, UpdatedAt
+		`SELECT id, StripeSessionID, Status, CustomerEmail, CustomerName, ShippingAddress,
+			ShipName, ShipLine1, ShipLine2, ShipCity, ShipState, ShipPostalCode, ShipCountry,
+			AmountTotalCents, Currency, RefundedAt, RefundReason, CreatedAt, UpdatedAt
 		 FROM ShopOrders
-		 ORDER BY id DESC`,
+		 WHERE (? = 0 OR id < ?)
+		 ORDER BY id DESC
+		 LIMIT ?`,
+		cursor,
+		cursor,
+		limit+1,
 	)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	defer rows.Close()
 
 	orders := make([]*Order, 0)
 	orderIDs := make([]int, 0)
@@ -149,12 +189,22 @@ func (m *Model) ListOrders() ([]*Order, error) {
 			&order.CustomerEmail,
 			&order.CustomerName,
 			&order.ShippingAddress,
+			&order.ShipName,
+			&order.ShipLine1,
+			&order.ShipLine2,
+			&order.ShipCity,
+			&order.ShipState,
+			&order.ShipPostalCode,
+			&order.ShipCountry,
 			&order.AmountTotalCents,
 			&order.Currency,
+			&order.RefundedAt,
+			&order.RefundReason,
 			&order.CreatedAt,
 			&order.UpdatedAt,
 		); err != nil {
-			return nil, err
+			rows.Close()
+			return nil, 0, err
 		}
 
 		order.ID = strconv.Itoa(orderID)
@@ -163,24 +213,45 @@ func (m *Model) ListOrders() ([]*Order, error) {
 	}
 
 	if err = rows.Err(); err != nil {
-		return nil, err
+		rows.Close()
+		return nil, 0, err
 	}
 
 	// Lines are loaded after the list cursor is closed: the pool can be a
 	// single connection, so a nested query while rows are open would block.
 	if err = rows.Close(); err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+
+	// The extra row requested above proves another page exists; the cursor is
+	// the id of the last order kept here.
+	nextCursor := 0
+	if len(orders) > limit {
+		nextCursor = orderIDs[limit-1]
+		orders = orders[:limit]
+		orderIDs = orderIDs[:limit]
+	}
+
+	if len(orderIDs) == 0 {
+		return orders, 0, nil
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(orderIDs)), ",")
+	args := make([]any, len(orderIDs))
+	for i, orderID := range orderIDs {
+		args[i] = orderID
 	}
 
 	linesByOrder := make(map[int][]*OrderLine)
 	lineRows, err := m.DB.Query(
 		`SELECT OrderID, id, ItemID, Title, UnitPriceCents, Quantity
 		 FROM ShopOrderLines
-		 WHERE OrderID IN (SELECT id FROM ShopOrders)
+		 WHERE OrderID IN (`+placeholders+`)
 		 ORDER BY OrderID ASC, id ASC`,
+		args...,
 	)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer lineRows.Close()
 
@@ -196,7 +267,7 @@ func (m *Model) ListOrders() ([]*Order, error) {
 			&line.UnitPriceCents,
 			&line.Quantity,
 		); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		line.ID = strconv.Itoa(lineID)
@@ -204,7 +275,7 @@ func (m *Model) ListOrders() ([]*Order, error) {
 	}
 
 	if err = lineRows.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	for index, orderID := range orderIDs {
@@ -215,7 +286,7 @@ func (m *Model) ListOrders() ([]*Order, error) {
 		orders[index].Lines = lines
 	}
 
-	return orders, nil
+	return orders, nextCursor, nil
 }
 
 // MarkOrderPaid records a confirmed payment. Stripe retries webhooks
@@ -228,6 +299,13 @@ func (m *Model) MarkOrderPaid(sessionID string, details PaidDetails) (bool, erro
 			CustomerEmail = ?,
 			CustomerName = ?,
 			ShippingAddress = ?,
+			ShipName = ?,
+			ShipLine1 = ?,
+			ShipLine2 = ?,
+			ShipCity = ?,
+			ShipState = ?,
+			ShipPostalCode = ?,
+			ShipCountry = ?,
 			AmountTotalCents = ?,
 			Currency = ?,
 			UpdatedAt = datetime('now')
@@ -236,6 +314,13 @@ func (m *Model) MarkOrderPaid(sessionID string, details PaidDetails) (bool, erro
 		details.CustomerEmail,
 		details.CustomerName,
 		details.ShippingAddress,
+		details.ShipName,
+		details.ShipLine1,
+		details.ShipLine2,
+		details.ShipCity,
+		details.ShipState,
+		details.ShipPostalCode,
+		details.ShipCountry,
 		details.AmountTotalCents,
 		currencyOr(details.Currency),
 		sessionID,
@@ -251,6 +336,70 @@ func (m *Model) MarkOrderPaid(sessionID string, details PaidDetails) (bool, erro
 	}
 
 	return rowsAffected > 0, nil
+}
+
+// MarkOrderRefundPending records a refund request against a paid order. It only
+// moves a paid order, so a repeated request updates nothing and reports false.
+func (m *Model) MarkOrderRefundPending(sessionID, reason string) (bool, error) {
+	result, err := m.DB.Exec(
+		`UPDATE ShopOrders
+		 SET Status = ?, RefundReason = ?, UpdatedAt = datetime('now')
+		 WHERE StripeSessionID = ? AND Status = ?`,
+		OrderStatusRefundPending,
+		reason,
+		sessionID,
+		OrderStatusPaid,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return rowsAffected > 0, nil
+}
+
+// MarkOrderRefunded confirms a refund and stamps the time. It accepts a paid
+// order (no refund request first) or one that is already refund_pending.
+func (m *Model) MarkOrderRefunded(sessionID string) (bool, error) {
+	result, err := m.DB.Exec(
+		`UPDATE ShopOrders
+		 SET Status = ?, RefundedAt = datetime('now'), UpdatedAt = datetime('now')
+		 WHERE StripeSessionID = ? AND Status IN (?, ?)`,
+		OrderStatusRefunded,
+		sessionID,
+		OrderStatusPaid,
+		OrderStatusRefundPending,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return rowsAffected > 0, nil
+}
+
+// RestoreStock puts a refunded or cancelled line's quantity back on a listing.
+// A non-positive quantity is a no-op.
+func (m *Model) RestoreStock(itemID string, quantity int) error {
+	if quantity < 1 {
+		return nil
+	}
+
+	_, err := m.DB.Exec(
+		`UPDATE ShopItems SET Stock = Stock + ? WHERE id = ?`,
+		quantity,
+		itemID,
+	)
+
+	return err
 }
 
 // DecrementStock lowers a listing's stock only when enough remains. D1 has no
