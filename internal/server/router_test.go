@@ -160,6 +160,7 @@ func loginCookie(t *testing.T, handler http.Handler) *http.Cookie {
 		"username": "admin",
 		"password": "password"
 	}`))
+	req.Header.Set("Origin", "http://localhost:3000")
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 

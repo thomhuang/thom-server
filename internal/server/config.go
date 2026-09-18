@@ -23,7 +23,6 @@ type Config struct {
 	Stripe            StripeConfig
 }
 
-// StripeConfig holds the Checkout and webhook settings.
 type StripeConfig struct {
 	SecretKey     string
 	WebhookSecret string
@@ -33,6 +32,11 @@ type StripeConfig struct {
 	CancelURL     string
 }
 
+// MinJWTSecretLength is the shortest signing secret the server accepts. A short
+// secret is the difference between a forgeable session and a real one, so the
+// server refuses to start rather than sign with one.
+const MinJWTSecretLength = 32
+
 func (c Config) authConfig() auth.Config {
 	return auth.Config{
 		AdminUsername:     c.AdminUsername,
@@ -40,6 +44,15 @@ func (c Config) authConfig() auth.Config {
 		JWTSecret:         c.JWTSecret,
 		SecureCookies:     c.SecureCookies,
 	}
+}
+
+// Validate rejects configuration that would be insecure if the server started.
+func (c Config) Validate() error {
+	if c.JWTSecret != "" && len(c.JWTSecret) < MinJWTSecretLength {
+		return fmt.Errorf("JWT_SECRET must be at least %d characters, got %d", MinJWTSecretLength, len(c.JWTSecret))
+	}
+
+	return nil
 }
 
 func ClientOriginsFromEnv() []string {

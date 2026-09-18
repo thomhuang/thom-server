@@ -94,7 +94,6 @@ func D1ConfigFromEnv() (d1.Config, bool) {
 	}, true
 }
 
-// UsingD1 reports whether the server should talk to Cloudflare D1.
 func UsingD1() bool {
 	_, ok := D1ConfigFromEnv()
 	return ok

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,6 +24,10 @@ const (
 	presignExpiry        = 10 * time.Minute
 	defaultSortOrder     = shopdata.DefaultImageSortOrder
 	objectKeyPrefix      = "shop"
+
+	// maxMeasurementInches bounds a garment measurement. It is far above any real
+	// garment, so it only catches obvious typos and unit mix-ups.
+	maxMeasurementInches = 100.0
 )
 
 // allowedImageTypes maps an accepted upload type to the stored file extension.
@@ -36,14 +41,12 @@ var allowedImageTypes = map[string]string{
 	"image/gif":  "gif",
 }
 
-// ImageStore signs uploads and removes objects. It is an interface so handler
-// tests can run without R2 credentials.
+// ImageStore is an interface so handler tests can run without R2 credentials.
 type ImageStore interface {
 	PresignPut(objectKey, contentType string, expires time.Duration) (string, error)
 	Delete(objectKey string) error
 }
 
-// Handler serves the shop routes.
 type Handler struct {
 	shop           *shopdata.Model
 	images         ImageStore
@@ -77,6 +80,11 @@ type itemRequest struct {
 	Currency    string `json:"currency"`
 	Stock       *int   `json:"stock"`
 	IsPublished *bool  `json:"isPublished"`
+	// Garment measurements in inches. Optional, so a missing field and an
+	// explicit 0 both mean "not provided".
+	PitToPitInches   *float64 `json:"pitToPitInches"`
+	BackLengthInches *float64 `json:"backLengthInches"`
+	ShoulderInches   *float64 `json:"shoulderInches"`
 }
 
 type itemPatch struct {
@@ -88,6 +96,10 @@ type itemPatch struct {
 	Currency    *string `json:"currency"`
 	Stock       *int    `json:"stock"`
 	IsPublished *bool   `json:"isPublished"`
+	// Pointers so an omitted field leaves the stored measurement untouched.
+	PitToPitInches   *float64 `json:"pitToPitInches"`
+	BackLengthInches *float64 `json:"backLengthInches"`
+	ShoulderInches   *float64 `json:"shoulderInches"`
 }
 
 type presignRequest struct {
@@ -217,6 +229,15 @@ func (h *Handler) CreateItem(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.IsPublished != nil {
 		item.IsPublished = *request.IsPublished
+	}
+	if request.PitToPitInches != nil {
+		item.PitToPitInches = *request.PitToPitInches
+	}
+	if request.BackLengthInches != nil {
+		item.BackLengthInches = *request.BackLengthInches
+	}
+	if request.ShoulderInches != nil {
+		item.ShoulderInches = *request.ShoulderInches
 	}
 
 	normalizeItem(item)
@@ -523,6 +544,10 @@ func normalizeItem(item *shopdata.Item) {
 	item.Brand = strings.TrimSpace(item.Brand)
 	item.Currency = strings.ToLower(strings.TrimSpace(item.Currency))
 
+	item.PitToPitInches = roundToTenth(item.PitToPitInches)
+	item.BackLengthInches = roundToTenth(item.BackLengthInches)
+	item.ShoulderInches = roundToTenth(item.ShoulderInches)
+
 	if item.Brand == "" {
 		item.BrandID = ""
 	} else if item.BrandID == "" {
@@ -562,6 +587,22 @@ func applyItemPatch(item *shopdata.Item, patch *itemPatch) {
 	if patch.IsPublished != nil {
 		item.IsPublished = *patch.IsPublished
 	}
+	if patch.PitToPitInches != nil {
+		item.PitToPitInches = *patch.PitToPitInches
+	}
+	if patch.BackLengthInches != nil {
+		item.BackLengthInches = *patch.BackLengthInches
+	}
+	if patch.ShoulderInches != nil {
+		item.ShoulderInches = *patch.ShoulderInches
+	}
+}
+
+// roundToTenth rounds a measurement to one decimal place. The UI shows a single
+// decimal (24.5), so storing more precision would only invite values that
+// display differently from how they were entered.
+func roundToTenth(value float64) float64 {
+	return math.Round(value*10) / 10
 }
 
 func isValidItem(item *shopdata.Item) error {
@@ -582,6 +623,32 @@ func isValidItem(item *shopdata.Item) error {
 	}
 	if !validCurrency(item.Currency) {
 		return fmt.Errorf("invalid currency %q", item.Currency)
+	}
+	if err := validMeasurement("pitToPitInches", item.PitToPitInches); err != nil {
+		return err
+	}
+	if err := validMeasurement("backLengthInches", item.BackLengthInches); err != nil {
+		return err
+	}
+	if err := validMeasurement("shoulderInches", item.ShoulderInches); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validMeasurement accepts 0 (meaning "not provided") or a plausible garment
+// measurement in inches. NaN and infinity would otherwise reach the database and
+// break JSON encoding.
+func validMeasurement(name string, value float64) error {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return fmt.Errorf("%s must be a finite number", name)
+	}
+	if value < 0 {
+		return fmt.Errorf("%s must be non-negative, got %v", name, value)
+	}
+	if value > maxMeasurementInches {
+		return fmt.Errorf("%s must be at most %v inches, got %v", name, maxMeasurementInches, value)
 	}
 
 	return nil

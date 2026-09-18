@@ -28,7 +28,7 @@ func TestVerifyAuthTokenRejectsRevokedToken(t *testing.T) {
 		t.Fatalf("expected token to verify before revocation, got %v", err)
 	}
 
-	h.tokenDenylist.revoke(token, time.Unix(claims.ExpiresAt, 0))
+	h.state.RevokeToken(token, time.Unix(claims.ExpiresAt, 0))
 
 	if _, err = h.verifyAuthToken(token); err == nil {
 		t.Fatal("expected revoked token to fail verification")
@@ -65,6 +65,48 @@ func TestAuthCookieName(t *testing.T) {
 	secure := newTestAuthHandler(Config{SecureCookies: true})
 	if got := secure.authCookieName(); got != "__Host-thom_auth" {
 		t.Errorf("got %q, want %q", got, "__Host-thom_auth")
+	}
+}
+
+func TestAuthCookieAttributes(t *testing.T) {
+	cases := []struct {
+		name          string
+		secureCookies bool
+		wantSecure    bool
+		wantName      string
+	}{
+		{name: "local", secureCookies: false, wantSecure: false, wantName: defaultAuthCookieName},
+		{name: "secure", secureCookies: true, wantSecure: true, wantName: "__Host-" + defaultAuthCookieName},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := newTestAuthHandler(Config{SecureCookies: tc.secureCookies})
+			recorder := httptest.NewRecorder()
+			handler.setAuthCookie(recorder, "token-value", 3600)
+
+			cookies := recorder.Result().Cookies()
+			if len(cookies) != 1 {
+				t.Fatalf("got %d cookies, want 1", len(cookies))
+			}
+			cookie := cookies[0]
+
+			if cookie.Name != tc.wantName {
+				t.Errorf("name = %q, want %q", cookie.Name, tc.wantName)
+			}
+			if !cookie.HttpOnly {
+				t.Error("cookie must be HttpOnly")
+			}
+			if cookie.Secure != tc.wantSecure {
+				t.Errorf("secure = %v, want %v", cookie.Secure, tc.wantSecure)
+			}
+			if cookie.SameSite != http.SameSiteLaxMode {
+				t.Errorf("same-site = %v, want Lax", cookie.SameSite)
+			}
+			if cookie.Path != "/" {
+				t.Errorf("path = %q, want /", cookie.Path)
+			}
+		})
 	}
 }
 

@@ -30,8 +30,8 @@ type StripeClient interface {
 	CreateCheckoutSession(ctx context.Context, params CheckoutParams) (*CheckoutSession, error)
 }
 
-// StripeSettings holds the webhook secret and Checkout options. It is separate
-// from Config so the handler does not depend on the server package.
+// StripeSettings is separate from Config so the handler does not depend on the
+// server package.
 type StripeSettings struct {
 	WebhookSecret string
 	TaxEnabled    bool
@@ -318,7 +318,6 @@ func formatAddress(address *stripe.Address) string {
 	return strings.Join(parts, ", ")
 }
 
-// stripeClient signs Checkout requests with the Stripe API.
 type stripeClient struct {
 	client *stripe.Client
 }

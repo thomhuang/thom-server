@@ -3,6 +3,7 @@ package shop
 import (
 	"database/sql"
 	"errors"
+	"strconv"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -170,6 +171,104 @@ func TestModelEnsureSchemaAddsBrandColumns(t *testing.T) {
 	}
 	if len(brands) != 0 {
 		t.Fatalf("expected no brands, got %d", len(brands))
+	}
+}
+
+func TestModelMeasurementRoundTripPreservesDecimal(t *testing.T) {
+	model := newTestModel(t)
+
+	created, err := model.InsertItem(&Item{
+		Title:            "Clothing listing",
+		PriceCents:       1800,
+		Currency:         "usd",
+		Stock:            1,
+		PitToPitInches:   24.5,
+		BackLengthInches: 22.5,
+		ShoulderInches:   18.25,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if created.PitToPitInches != 24.5 {
+		t.Fatalf("pit-to-pit = %v, want 24.5", created.PitToPitInches)
+	}
+	if created.BackLengthInches != 22.5 {
+		t.Fatalf("back length = %v, want 22.5", created.BackLengthInches)
+	}
+	// 18.25 is stored exactly even though the UI only shows one decimal.
+	if created.ShoulderInches != 18.25 {
+		t.Fatalf("shoulder = %v, want 18.25", created.ShoulderInches)
+	}
+
+	reloadedID, err := strconv.Atoi(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := model.GetItemByID(reloadedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.PitToPitInches != 24.5 || reloaded.BackLengthInches != 22.5 {
+		t.Fatalf(
+			"reloaded measurements = %v/%v, want 24.5/22.5",
+			reloaded.PitToPitInches,
+			reloaded.BackLengthInches,
+		)
+	}
+}
+
+func TestModelMeasurementsDefaultToZero(t *testing.T) {
+	model := newTestModel(t)
+
+	// A non-clothing listing simply omits the measurements.
+	created, err := model.InsertItem(&Item{
+		Title:      "Non-clothing listing",
+		PriceCents: 500,
+		Currency:   "usd",
+		Stock:      1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if created.PitToPitInches != 0 || created.BackLengthInches != 0 || created.ShoulderInches != 0 {
+		t.Fatalf(
+			"expected zero measurements, got %v/%v/%v",
+			created.PitToPitInches,
+			created.BackLengthInches,
+			created.ShoulderInches,
+		)
+	}
+}
+
+func TestModelUpdateItemPersistsMeasurements(t *testing.T) {
+	model := newTestModel(t)
+
+	item, err := model.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	item.PitToPitInches = 21.5
+	item.BackLengthInches = 27.5
+	item.ShoulderInches = 19.5
+
+	updated, err := model.UpdateItem(1, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if updated.PitToPitInches != 21.5 ||
+		updated.BackLengthInches != 27.5 ||
+		updated.ShoulderInches != 19.5 {
+		t.Fatalf(
+			"updated measurements = %v/%v/%v, want 21.5/27.5/19.5",
+			updated.PitToPitInches,
+			updated.BackLengthInches,
+			updated.ShoulderInches,
+		)
 	}
 }
 

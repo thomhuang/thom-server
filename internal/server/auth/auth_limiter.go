@@ -3,6 +3,8 @@ package auth
 import (
 	"sync"
 	"time"
+
+	"thom-server/internal/authstate"
 )
 
 type loginAttempt struct {
@@ -52,13 +54,13 @@ func (l *loginRateLimiter) recordFailure(key string) {
 	if !attempt.lockedUntil.IsZero() && now.Before(attempt.lockedUntil) {
 		return
 	}
-	if attempt.firstFailure.IsZero() || now.Sub(attempt.firstFailure) > loginFailureWindow {
+	if attempt.firstFailure.IsZero() || now.Sub(attempt.firstFailure) > authstate.LoginFailureWindow {
 		attempt = loginAttempt{firstFailure: now}
 	}
 
 	attempt.failures++
-	if attempt.failures >= loginFailureLimit {
-		attempt.lockedUntil = now.Add(loginLockoutDuration)
+	if attempt.failures >= authstate.LoginFailureLimit {
+		attempt.lockedUntil = now.Add(authstate.LoginLockoutDuration)
 	}
 
 	l.attempts[key] = attempt
@@ -87,7 +89,7 @@ func (l *loginRateLimiter) pruneExpired(now time.Time) {
 			}
 			continue
 		}
-		if !attempt.firstFailure.IsZero() && now.Sub(attempt.firstFailure) > loginFailureWindow {
+		if !attempt.firstFailure.IsZero() && now.Sub(attempt.firstFailure) > authstate.LoginFailureWindow {
 			delete(l.attempts, key)
 		}
 	}

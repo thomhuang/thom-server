@@ -12,10 +12,18 @@ import (
 const (
 	defaultAuthCookieName = "thom_auth"
 	authTokenDuration     = 12 * time.Hour
-	loginFailureLimit     = 5
-	loginFailureWindow    = 15 * time.Minute
-	loginLockoutDuration  = 15 * time.Minute
 )
+
+// StateStore persists the auth decisions that must outlive a process: login
+// lockouts and revoked tokens. authstate.Model implements it against the
+// application database; memoryState is the in-process default.
+type StateStore interface {
+	LoginLockedUntil(key string) (time.Time, bool, error)
+	RecordLoginFailure(key string) error
+	ClearLoginFailures(key string) error
+	RevokeToken(token string, expiresAt time.Time) error
+	IsTokenRevoked(token string) (bool, error)
+}
 
 type authContextKey string
 
@@ -48,8 +56,7 @@ type Config struct {
 type Handler struct {
 	config        Config
 	responder     response.Responder
-	loginLimiter  *loginRateLimiter
-	tokenDenylist *tokenDenylist
+	state         StateStore
 	allowedOrigin func(string) bool
 	infoLog       *log.Logger
 }
@@ -61,11 +68,20 @@ func New(config Config, responder response.Responder, allowedOrigin func(string)
 	return &Handler{
 		config:        config,
 		responder:     responder,
-		loginLimiter:  newLoginRateLimiter(),
-		tokenDenylist: newTokenDenylist(),
+		state:         newMemoryState(),
 		allowedOrigin: allowedOrigin,
 		infoLog:       infoLog,
 	}
+}
+
+// WithState swaps in a persistent store. A nil store leaves the in-memory
+// default, which is what tests and database-less local runs use.
+func (h *Handler) WithState(state StateStore) *Handler {
+	if state != nil {
+		h.state = state
+	}
+
+	return h
 }
 
 func (h *Handler) writeJSON(w http.ResponseWriter, status int, data any, headers http.Header) error {

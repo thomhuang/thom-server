@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -88,6 +89,22 @@ func TestIsValidItem(t *testing.T) {
 		{name: "bad currency length", mutate: func(i *shopdata.Item) { i.Currency = "us" }, valid: false},
 		{name: "uppercase currency", mutate: func(i *shopdata.Item) { i.Currency = "USD" }, valid: false},
 		{name: "long title", mutate: func(i *shopdata.Item) { i.Title = strings.Repeat("a", maxTitleLength+1) }, valid: false},
+		{name: "decimal measurements", mutate: func(i *shopdata.Item) {
+			i.PitToPitInches = 24.5
+			i.BackLengthInches = 22.5
+			i.ShoulderInches = 18.25
+		}, valid: true},
+		{name: "omitted measurements are allowed", mutate: func(i *shopdata.Item) {
+			i.PitToPitInches = 0
+			i.BackLengthInches = 0
+			i.ShoulderInches = 0
+		}, valid: true},
+		{name: "negative pit-to-pit", mutate: func(i *shopdata.Item) { i.PitToPitInches = -1 }, valid: false},
+		{name: "negative back length", mutate: func(i *shopdata.Item) { i.BackLengthInches = -0.5 }, valid: false},
+		{name: "negative shoulder", mutate: func(i *shopdata.Item) { i.ShoulderInches = -24.5 }, valid: false},
+		{name: "absurd measurement", mutate: func(i *shopdata.Item) { i.PitToPitInches = maxMeasurementInches + 1 }, valid: false},
+		{name: "NaN measurement", mutate: func(i *shopdata.Item) { i.PitToPitInches = math.NaN() }, valid: false},
+		{name: "infinite measurement", mutate: func(i *shopdata.Item) { i.BackLengthInches = math.Inf(1) }, valid: false},
 	}
 
 	for _, testCase := range testCases {
@@ -224,6 +241,114 @@ func TestCreateItem(t *testing.T) {
 	}
 	if !created.IsPublished {
 		t.Fatal("expected the item to be published")
+	}
+}
+
+func TestNormalizeItemRoundsMeasurementsToOneDecimal(t *testing.T) {
+	item := &shopdata.Item{
+		Title:            "Jacket",
+		PriceCents:       1000,
+		PitToPitInches:   24.46,
+		BackLengthInches: 22.55,
+		ShoulderInches:   18.04,
+	}
+
+	normalizeItem(item)
+
+	if item.PitToPitInches != 24.5 {
+		t.Fatalf("pit-to-pit = %v, want 24.5", item.PitToPitInches)
+	}
+	if item.BackLengthInches != 22.6 {
+		t.Fatalf("back length = %v, want 22.6", item.BackLengthInches)
+	}
+	if item.ShoulderInches != 18 {
+		t.Fatalf("shoulder = %v, want 18", item.ShoulderInches)
+	}
+}
+
+func TestCreateItemAcceptsDecimalMeasurements(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	body := `{"title":"Denim jacket","priceCents":8500,"stock":1,"currency":"usd",` +
+		`"pitToPitInches":24.5,"backLengthInches":22.5,"shoulderInches":18.25}`
+	rr := serve(handler.CreateItem, http.MethodPost, "/shop/items", body)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d (%s)", http.StatusCreated, rr.Code, rr.Body.String())
+	}
+
+	var created shopdata.Item
+	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.PitToPitInches != 24.5 {
+		t.Fatalf("pitToPitInches = %v, want 24.5", created.PitToPitInches)
+	}
+	if created.BackLengthInches != 22.5 {
+		t.Fatalf("backLengthInches = %v, want 22.5", created.BackLengthInches)
+	}
+	if created.ShoulderInches != 18.3 {
+		t.Fatalf("shoulderInches = %v, want 18.3 (18.25 rounds to one decimal)", created.ShoulderInches)
+	}
+}
+
+func TestCreateItemWithoutMeasurementsLeavesThemZero(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	// A listing that is not clothing omits the measurements entirely.
+	body := `{"title":"Coffee mug","priceCents":1800,"stock":3,"currency":"usd"}`
+	rr := serve(handler.CreateItem, http.MethodPost, "/shop/items", body)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d (%s)", http.StatusCreated, rr.Code, rr.Body.String())
+	}
+
+	var created shopdata.Item
+	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.PitToPitInches != 0 || created.BackLengthInches != 0 || created.ShoulderInches != 0 {
+		t.Fatalf(
+			"expected zero measurements, got %v/%v/%v",
+			created.PitToPitInches,
+			created.BackLengthInches,
+			created.ShoulderInches,
+		)
+	}
+}
+
+func TestUpdateItemRejectsNegativeMeasurement(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	rr := serve(handler.UpdateItem, http.MethodPatch, "/shop/items/1",
+		`{"pitToPitInches":-24.5}`, "id", "1")
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d (%s)", http.StatusBadRequest, rr.Code, rr.Body.String())
+	}
+}
+
+func TestUpdateItemAcceptsDecimalMeasurement(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	rr := serve(handler.UpdateItem, http.MethodPatch, "/shop/items/1",
+		`{"pitToPitInches":21.5,"backLengthInches":27.5,"shoulderInches":19.5}`, "id", "1")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d (%s)", http.StatusOK, rr.Code, rr.Body.String())
+	}
+
+	var updated shopdata.Item
+	if err := json.Unmarshal(rr.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.PitToPitInches != 21.5 || updated.BackLengthInches != 27.5 || updated.ShoulderInches != 19.5 {
+		t.Fatalf(
+			"measurements = %v/%v/%v, want 21.5/27.5/19.5",
+			updated.PitToPitInches,
+			updated.BackLengthInches,
+			updated.ShoulderInches,
+		)
 	}
 }
 

@@ -74,7 +74,13 @@ func (h *Handler) verifyAuthToken(token string) (*authClaims, error) {
 		return nil, errors.New("token expired")
 	}
 
-	if h.tokenDenylist.isRevoked(token) {
+	revoked, err := h.state.IsTokenRevoked(token)
+	if err != nil {
+		// Fail closed: a token cannot be trusted if its revocation status is
+		// unknown.
+		return nil, fmt.Errorf("token revocation check failed: %w", err)
+	}
+	if revoked {
 		return nil, errors.New("token revoked")
 	}
 

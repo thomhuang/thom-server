@@ -13,11 +13,10 @@ func (h *Handler) authCookieName() string {
 }
 
 func (h *Handler) setAuthCookie(w http.ResponseWriter, value string, maxAge int) {
-	sameSiteMode := http.SameSiteLaxMode
-	if h.config.SecureCookies {
-		sameSiteMode = http.SameSiteNoneMode
-	}
-
+	// The API is always same-origin with the site (the Worker proxies /api to
+	// thom-server), so Lax still sends the cookie on every legitimate request
+	// while blocking cross-site ones. SameSite=None would only widen CSRF
+	// exposure, so it is not needed here even with Secure enabled.
 	http.SetCookie(w, &http.Cookie{
 		Name:     h.authCookieName(),
 		Value:    value,
@@ -25,6 +24,6 @@ func (h *Handler) setAuthCookie(w http.ResponseWriter, value string, maxAge int)
 		MaxAge:   maxAge,
 		HttpOnly: true,
 		Secure:   h.config.SecureCookies,
-		SameSite: sameSiteMode,
+		SameSite: http.SameSiteLaxMode,
 	})
 }

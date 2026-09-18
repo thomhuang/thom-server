@@ -30,6 +30,7 @@ func newTestApp(t *testing.T) *App {
 			JWTSecret:         "test-secret",
 			ClientOrigins:     []string{"http://localhost:3000", "https://app.example.com"},
 		},
+		nil,
 	)
 }
 

@@ -21,7 +21,6 @@ import (
 
 const defaultEndpoint = "https://api.cloudflare.com/client/v4"
 
-// Config holds the Cloudflare D1 connection settings.
 type Config struct {
 	AccountID  string
 	DatabaseID string

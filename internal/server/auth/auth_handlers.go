@@ -20,7 +20,13 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	throttleKey := loginThrottleKey(r, request.Username)
-	if lockedUntil, locked := h.loginLimiter.isLocked(throttleKey); locked {
+	lockedUntil, locked, err := h.state.LoginLockedUntil(throttleKey)
+	if err != nil {
+		// Fail open on throttle storage errors; a database problem should not
+		// prevent a legitimate login. The attempt is still logged.
+		h.infoLog.Printf("LOGIN throttle lookup failed: %v", err)
+	}
+	if locked {
 		h.infoLog.Printf("LOGIN rate-limited %s (until %s)", throttleKey, lockedUntil.Format(time.RFC3339))
 		h.setRetryAfter(w, lockedUntil)
 		h.clientError(w, http.StatusTooManyRequests)
@@ -28,13 +34,17 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.validLoginCredentials(request) {
-		h.loginLimiter.recordFailure(throttleKey)
+		if err := h.state.RecordLoginFailure(throttleKey); err != nil {
+			h.infoLog.Printf("LOGIN failed to record attempt: %v", err)
+		}
 		h.infoLog.Printf("LOGIN failed invalid credentials %s", throttleKey)
 		h.clientError(w, http.StatusUnauthorized)
 		return
 	}
 
-	h.loginLimiter.recordSuccess(throttleKey)
+	if err := h.state.ClearLoginFailures(throttleKey); err != nil {
+		h.infoLog.Printf("LOGIN failed to clear attempts: %v", err)
+	}
 
 	token, err := h.createAuthToken(request.Username)
 	if err != nil {
@@ -60,7 +70,9 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	claims, _ := claimsFromRequest(r)
 	if claims != nil {
 		if cookie, err := r.Cookie(h.authCookieName()); err == nil {
-			h.tokenDenylist.revoke(cookie.Value, time.Unix(claims.ExpiresAt, 0))
+			if err := h.state.RevokeToken(cookie.Value, time.Unix(claims.ExpiresAt, 0)); err != nil {
+				h.infoLog.Printf("LOGOUT failed to revoke token: %v", err)
+			}
 		}
 	}
 

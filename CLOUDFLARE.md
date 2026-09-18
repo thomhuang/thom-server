@@ -13,6 +13,29 @@ database backend and the deployment glue change:
 
 Local development is unchanged: `go run ./cmd/server` uses `DB_PATH`/SQLite.
 
+## Environments
+
+Two parallel environments are deployed from this repository, selected by the
+Wrangler config file:
+
+| Environment | Config | Worker | D1 | R2 | Website |
+|---|---|---|---|---|---|
+| production | `wrangler.jsonc` | `thom-server` | `thom-db` (`d9ebb328-8e11-474f-b3c8-fe2660bd9c8c`) | `listing-images`, custom domain `thomhuang.com` | `https://www.thomhuang.com` |
+| test | `wrangler.test.jsonc` | `thom-server-test` | `thom-db-test` (`de8610e7-76af-427b-a228-a742babcb989`) | `listing-images-test`, `r2.dev` | `https://thom-website-test.thomhuang.workers.dev` |
+
+Secrets are per-Worker, so set them against the matching config file:
+
+```sh
+npx wrangler secret put CF_API_TOKEN -c wrangler.test.jsonc
+```
+
+As of 2026-09-18 the **test** Worker is missing `CF_API_TOKEN`, so it falls back
+to the container's local SQLite file instead of `thom-db-test` (the D1 test
+database still has no tables). Set that secret before treating test as a
+faithful mirror of production. Production pushes are also not currently
+producing Workers Builds, so the deployed `thom-server` is older than `main` —
+deploy manually (below) until the build trigger is fixed.
+
 ## Prerequisites
 
 - A Cloudflare account on the **Workers Paid** plan ($5/mo, required by Containers).
@@ -49,6 +72,9 @@ npx wrangler secret put ADMIN_PASSWORD_HASH   # bcrypt hash, see README
 npx wrangler secret put JWT_SECRET
 ```
 
+`JWT_SECRET` must be at least 32 characters; the server refuses to start with a
+shorter one. Generate it with something like `openssl rand -base64 48`.
+
 Generate a bcrypt hash with the helper in this repository (it uses the same
 `golang.org/x/crypto/bcrypt` version and cost the server verifies against):
 
@@ -61,8 +87,9 @@ the server accepts `$2a$`, `$2b$`, and `$2y$` hashes.
 
 ## 4. Point CORS at the website
 
-Set `CLIENT_ORIGIN_URLS` in `wrangler.jsonc` to the `thom-website` origin (for
-example `https://thom-website.your-subdomain.workers.dev`). This is the origin the
+Set `CLIENT_ORIGIN_URLS` in the matching config file to the website origin:
+production uses `https://www.thomhuang.com`, test uses
+`https://thom-website-test.thomhuang.workers.dev`. This is the origin the
 browser sends; the website Worker proxies `/api/*` so requests stay same-origin.
 
 ## 5. Deploy
@@ -70,7 +97,8 @@ browser sends; the website Worker proxies `/api/*` so requests stay same-origin.
 Locally (Docker running):
 
 ```sh
-npx wrangler deploy
+npx wrangler deploy                    # production (wrangler.jsonc)
+npx wrangler deploy -c wrangler.test.jsonc   # test (thom-server-test)
 ```
 
 Or connect the repository under **Workers & Pages → thom-server → Settings → Builds**
@@ -78,6 +106,9 @@ and use:
 
 - Build command: `npm install`
 - Deploy command: `npx wrangler deploy`
+
+Workers Builds deploys production only. The test Worker is deployed manually with
+`-c wrangler.test.jsonc`.
 
 The first deploy can take a few minutes to provision the container.
 
@@ -87,13 +118,15 @@ The tables are created automatically on first container start. Trigger it once,
 then import the local rows:
 
 ```sh
-curl https://thom-server.your-subdomain.workers.dev/coffee
+curl https://www.thomhuang.com/api/coffee
+# test: https://thom-website-test.thomhuang.workers.dev/api/coffee
 
 # Export rows (schema is handled by the server) and import them.
 sqlite3 internal/thom.db .dump > thom-dump.sql
 # PowerShell: Select-String -Path thom-dump.sql -Pattern '^INSERT' | ForEach-Object Line > thom-data.sql
 grep '^INSERT' thom-dump.sql > thom-data.sql
 npx wrangler d1 execute thom-db --remote --file=thom-data.sql
+# test: npx wrangler d1 execute thom-db-test -c wrangler.test.jsonc --remote --file=thom-data.sql
 ```
 
 `CoffeeRoasters` is also seeded from `CoffeeEntries` on startup, so roasters you did
@@ -155,13 +188,19 @@ npx wrangler secret put R2_ACCESS_KEY_ID
 npx wrangler secret put R2_SECRET_ACCESS_KEY
 ```
 
-The non-secret values live in the `vars` block of `wrangler.jsonc`:
+The non-secret values live in the `vars` block of each config file:
 `R2_ACCOUNT_ID` (the same value as `D1_ACCOUNT_ID`), `R2_BUCKET`, and
 `R2_PUBLIC_BASE_URL`. `R2_PUBLIC_BASE_URL` is the scheme + host that serves the
 bucket's objects — the bucket's `r2.dev` URL or a custom domain — with no
 trailing slash. Public buckets do not list contents, so the bare root 404s and
-only full object paths resolve. `R2_ENDPOINT` is a test-only override; do not
-set it in a real environment.
+only full object paths resolve.
+
+| Environment | Bucket | `R2_PUBLIC_BASE_URL` |
+|---|---|---|
+| production | `listing-images` | `https://thomhuang.com` (custom domain, verified serving) |
+| test | `listing-images-test` | `https://pub-9a8dcf30844143e6a0515c4feb4987f9.r2.dev` |
+
+`R2_ENDPOINT` is a test-only override; do not set it in a real environment.
 
 ## Stripe (shop checkout)
 
@@ -177,9 +216,12 @@ npx wrangler secret put STRIPE_WEBHOOK_SECRET
 meaning no shipping line) are vars in `wrangler.jsonc`. Leave tax off until tax
 registrations are configured; Stripe rejects `automatic_tax` otherwise.
 
-Point a webhook endpoint at `https://<server>/shop/webhooks/stripe` for the
+Point a webhook endpoint at `<server origin>/shop/webhooks/stripe` for the
 `checkout.session.completed` event and use its signing secret as
-`STRIPE_WEBHOOK_SECRET`. Locally, `stripe listen --forward-to
+`STRIPE_WEBHOOK_SECRET`. Through the website proxy that is
+`https://www.thomhuang.com/api/shop/webhooks/stripe` in production and
+`https://thom-website-test.thomhuang.workers.dev/api/shop/webhooks/stripe` in
+test. Locally, `stripe listen --forward-to
 localhost:4000/shop/webhooks/stripe` prints a temporary secret. The success and
 cancel redirects are derived from the first `CLIENT_ORIGIN_URLS` entry
 (`/shop/order?session_id=...` and `/shop`).
@@ -189,9 +231,10 @@ cancel redirects are derived from the first `CLIENT_ORIGIN_URLS` entry
 - D1 does not support interactive transactions, so `Model.Insert`/`Model.Update`
   upsert the roaster and then write the entry as separate statements. A failed entry
   insert can leave an unused roaster row; entries themselves are still atomic.
-- Login rate limiting and logout token revocation remain in-memory and reset when
-  the container restarts or sleeps. A single container instance keeps them
-  consistent while it is running.
+- Login rate limiting and logout token revocation are stored in the app database
+  (`AuthLoginFailures` / `AuthRevokedTokens`), so they survive restarts and sleep
+  and are shared if the deployment ever scales past one instance. The in-memory
+  store is only the fallback for runs without a database (tests).
 - The container sleeps after 10 minutes idle; the first request after that has a
   cold start (usually 1–3 seconds). Adjust `sleepAfter` in `worker/index.js`.
 - Adopt `instance_type`/`max_instances` in `wrangler.jsonc` if you need more

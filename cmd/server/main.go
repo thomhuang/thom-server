@@ -13,6 +13,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"thom-server/internal/authstate"
 	"thom-server/internal/coffee"
 	"thom-server/internal/server"
 	"thom-server/internal/shop"
@@ -53,6 +54,11 @@ func main() {
 		errorLog.Fatal(err)
 	}
 
+	authState := &authstate.Model{DB: appDB}
+	if err := authState.EnsureSchema(); err != nil {
+		errorLog.Fatal(err)
+	}
+
 	clientOrigins := server.ClientOriginsFromEnv()
 
 	r2Config := server.R2ConfigFromEnv()
@@ -60,21 +66,27 @@ func main() {
 		errorLog.Printf("R2 image uploads will fail: %v", err)
 	}
 
+	config := server.Config{
+		AdminUsername:     os.Getenv("ADMIN_USERNAME"),
+		AdminPasswordHash: os.Getenv("ADMIN_PASSWORD_HASH"),
+		JWTSecret:         os.Getenv("JWT_SECRET"),
+		ClientOrigins:     clientOrigins,
+		SecureCookies:     server.SecureCookiesFromEnv(),
+		R2:                r2Config,
+		R2PublicBaseURL:   server.R2PublicBaseURLFromEnv(),
+		Stripe:            server.StripeConfigFromEnv(clientOrigins),
+	}
+	if err := config.Validate(); err != nil {
+		errorLog.Fatal(err)
+	}
+
 	app := server.New(
 		errorLog,
 		infoLog,
 		coffeeModel,
 		shopModel,
-		server.Config{
-			AdminUsername:     os.Getenv("ADMIN_USERNAME"),
-			AdminPasswordHash: os.Getenv("ADMIN_PASSWORD_HASH"),
-			JWTSecret:         os.Getenv("JWT_SECRET"),
-			ClientOrigins:     clientOrigins,
-			SecureCookies:     server.SecureCookiesFromEnv(),
-			R2:                r2Config,
-			R2PublicBaseURL:   server.R2PublicBaseURLFromEnv(),
-			Stripe:            server.StripeConfigFromEnv(clientOrigins),
-		},
+		config,
+		authState,
 	)
 
 	srv := &http.Server{

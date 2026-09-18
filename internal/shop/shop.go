@@ -10,10 +10,8 @@ import (
 )
 
 const (
-	// DefaultCurrency is used when an item does not set one.
 	DefaultCurrency = "usd"
 
-	// MaxItemImages bounds how many images one listing can hold.
 	MaxItemImages = 8
 
 	// DefaultImageSortOrder places new images after existing ones.
@@ -30,27 +28,32 @@ type Image struct {
 	SortOrder int    `json:"sortOrder"`
 }
 
-// Brand is a maker label listings can reference.
 type Brand struct {
 	ID        string `json:"id"`
 	Brand     string `json:"brand"`
 	CreatedAt string `json:"createdAt,omitempty"`
 }
 
-// Item is a shop listing.
 type Item struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	BrandID     string   `json:"brandId"`
-	Brand       string   `json:"brand"`
-	PriceCents  int      `json:"priceCents"`
-	Currency    string   `json:"currency"`
-	Stock       int      `json:"stock"`
-	IsPublished bool     `json:"isPublished"`
-	Images      []*Image `json:"images"`
-	CreatedAt   string   `json:"createdAt,omitempty"`
-	UpdatedAt   string   `json:"updatedAt,omitempty"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	BrandID     string `json:"brandId"`
+	Brand       string `json:"brand"`
+	PriceCents  int    `json:"priceCents"`
+	Currency    string `json:"currency"`
+	Stock       int    `json:"stock"`
+	IsPublished bool   `json:"isPublished"`
+	// Garment measurements in inches, for clothing listings. They are optional:
+	// a listing for anything that is not clothing simply leaves them at zero,
+	// which is why zero means "not provided" rather than a real measurement.
+	// The UI converts to centimetres for display.
+	PitToPitInches   float64  `json:"pitToPitInches"`
+	BackLengthInches float64  `json:"backLengthInches"`
+	ShoulderInches   float64  `json:"shoulderInches"`
+	Images           []*Image `json:"images"`
+	CreatedAt        string   `json:"createdAt,omitempty"`
+	UpdatedAt        string   `json:"updatedAt,omitempty"`
 }
 
 // ItemSummary is the list representation. PrimaryImageKey stays internal so the
@@ -68,12 +71,10 @@ type ItemSummary struct {
 	PrimaryImageURL string `json:"primaryImageUrl"`
 }
 
-// Model wraps the application database.
 type Model struct {
 	DB *sql.DB
 }
 
-// EnsureSchema creates the shop tables when they are missing.
 func (m *Model) EnsureSchema() error {
 	stmt := `
 		CREATE TABLE IF NOT EXISTS ShopBrands (
@@ -96,6 +97,9 @@ func (m *Model) EnsureSchema() error {
 			Currency TEXT NOT NULL DEFAULT 'usd',
 			Stock INTEGER NOT NULL DEFAULT 0,
 			IsPublished INTEGER NOT NULL DEFAULT 0,
+			PitToPitInches REAL NOT NULL DEFAULT 0,
+			BackLengthInches REAL NOT NULL DEFAULT 0,
+			ShoulderInches REAL NOT NULL DEFAULT 0,
 			CreatedAt TEXT NOT NULL DEFAULT (datetime('now')),
 			UpdatedAt TEXT NOT NULL DEFAULT (datetime('now'))
 		);
@@ -197,6 +201,11 @@ func (m *Model) ensureShopItemColumns() error {
 	}{
 		{name: "BrandID", definition: "BrandID TEXT NOT NULL DEFAULT ''"},
 		{name: "Brand", definition: "Brand TEXT NOT NULL DEFAULT ''"},
+		// Optional garment measurements in inches. REAL so a half inch is exact
+		// enough; 0 means the listing has no measurement.
+		{name: "PitToPitInches", definition: "PitToPitInches REAL NOT NULL DEFAULT 0"},
+		{name: "BackLengthInches", definition: "BackLengthInches REAL NOT NULL DEFAULT 0"},
+		{name: "ShoulderInches", definition: "ShoulderInches REAL NOT NULL DEFAULT 0"},
 	}
 	for _, column := range columns {
 		if existingColumns[column.name] {
@@ -271,6 +280,7 @@ func (m *Model) GetItems(includeUnpublished bool) ([]*ItemSummary, error) {
 func (m *Model) GetItemByID(id int) (*Item, error) {
 	stmt := `
 		SELECT id, Title, Description, BrandID, Brand, PriceCents, Currency, Stock, IsPublished,
+			PitToPitInches, BackLengthInches, ShoulderInches,
 			CreatedAt, UpdatedAt
 		FROM ShopItems
 		WHERE id = ?`
@@ -288,6 +298,9 @@ func (m *Model) GetItemByID(id int) (*Item, error) {
 		&item.Currency,
 		&item.Stock,
 		&isPublished,
+		&item.PitToPitInches,
+		&item.BackLengthInches,
+		&item.ShoulderInches,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	)
@@ -310,7 +323,6 @@ func (m *Model) GetItemByID(id int) (*Item, error) {
 	return item, nil
 }
 
-// InsertItem stores a new listing and returns the saved row.
 func (m *Model) InsertItem(item *Item) (*Item, error) {
 	brand, err := m.upsertBrand(&Brand{ID: item.BrandID, Brand: item.Brand})
 	if err != nil {
@@ -320,8 +332,9 @@ func (m *Model) InsertItem(item *Item) (*Item, error) {
 	item.Brand = brand.Brand
 
 	stmt := `
-		INSERT INTO ShopItems (Title, Description, BrandID, Brand, PriceCents, Currency, Stock, IsPublished)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		INSERT INTO ShopItems (Title, Description, BrandID, Brand, PriceCents, Currency, Stock, IsPublished,
+			PitToPitInches, BackLengthInches, ShoulderInches)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	result, err := m.DB.Exec(
 		stmt,
@@ -333,6 +346,9 @@ func (m *Model) InsertItem(item *Item) (*Item, error) {
 		currencyOr(item.Currency),
 		item.Stock,
 		boolToInt(item.IsPublished),
+		item.PitToPitInches,
+		item.BackLengthInches,
+		item.ShoulderInches,
 	)
 	if err != nil {
 		return nil, err
@@ -346,7 +362,6 @@ func (m *Model) InsertItem(item *Item) (*Item, error) {
 	return m.GetItemByID(int(id))
 }
 
-// UpdateItem replaces the editable fields of a listing.
 func (m *Model) UpdateItem(id int, item *Item) (*Item, error) {
 	brand, err := m.upsertBrand(&Brand{ID: item.BrandID, Brand: item.Brand})
 	if err != nil {
@@ -365,6 +380,9 @@ func (m *Model) UpdateItem(id int, item *Item) (*Item, error) {
 			Currency = ?,
 			Stock = ?,
 			IsPublished = ?,
+			PitToPitInches = ?,
+			BackLengthInches = ?,
+			ShoulderInches = ?,
 			UpdatedAt = datetime('now')
 		WHERE id = ?`
 
@@ -378,6 +396,9 @@ func (m *Model) UpdateItem(id int, item *Item) (*Item, error) {
 		currencyOr(item.Currency),
 		item.Stock,
 		boolToInt(item.IsPublished),
+		item.PitToPitInches,
+		item.BackLengthInches,
+		item.ShoulderInches,
 		id,
 	)
 	if err != nil {
@@ -419,7 +440,6 @@ func (m *Model) DeleteItem(id int) ([]*Image, error) {
 	return images, nil
 }
 
-// AddImage attaches an uploaded object to a listing.
 func (m *Model) AddImage(itemID int, image *Image) (*Image, error) {
 	stmt := `
 		INSERT INTO ShopItemImages (ItemID, ObjectKey, AltText, SortOrder)
@@ -470,7 +490,6 @@ func (m *Model) DeleteImage(itemID, imageID int) (*Image, error) {
 	return image, nil
 }
 
-// CountImages reports how many images a listing currently has.
 func (m *Model) CountImages(itemID int) (int, error) {
 	var count int
 	err := m.DB.QueryRow(

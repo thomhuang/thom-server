@@ -14,32 +14,35 @@ import (
 )
 
 type App struct {
-	errorLog   *log.Logger
-	infoLog    *log.Logger
-	coffee     *coffeedata.Model
-	shop       *shopdata.Model
-	imageStore shophttp.ImageStore
-	stripe     shophttp.StripeClient
-	config     Config
-	responder  response.Responder
-	auth       *authhttp.Handler
+	errorLog        *log.Logger
+	infoLog         *log.Logger
+	coffee          *coffeedata.Model
+	shop            *shopdata.Model
+	imageStore      shophttp.ImageStore
+	stripe          shophttp.StripeClient
+	config          Config
+	responder       response.Responder
+	auth            *authhttp.Handler
+	checkoutLimiter *rateLimiter
 }
 
-func New(errorLog, infoLog *log.Logger, coffeeModel *coffeedata.Model, shopModel *shopdata.Model, config Config) *App {
+func New(errorLog, infoLog *log.Logger, coffeeModel *coffeedata.Model, shopModel *shopdata.Model, config Config, authState authhttp.StateStore) *App {
 	if infoLog == nil {
 		infoLog = log.New(io.Discard, "", 0)
 	}
 	app := &App{
-		errorLog:   errorLog,
-		infoLog:    infoLog,
-		coffee:     coffeeModel,
-		shop:       shopModel,
-		imageStore: r2.New(config.R2),
-		stripe:     shophttp.NewStripeClient(config.Stripe.SecretKey),
-		config:     config,
-		responder:  response.Responder{ErrorLog: errorLog},
+		errorLog:        errorLog,
+		infoLog:         infoLog,
+		coffee:          coffeeModel,
+		shop:            shopModel,
+		imageStore:      r2.New(config.R2),
+		stripe:          shophttp.NewStripeClient(config.Stripe.SecretKey),
+		config:          config,
+		responder:       response.Responder{ErrorLog: errorLog},
+		checkoutLimiter: newRateLimiter(checkoutRateLimit, checkoutRateWindow),
 	}
-	app.auth = authhttp.New(config.authConfig(), app.responder, app.isAllowedOrigin, app.infoLog)
+	app.auth = authhttp.New(config.authConfig(), app.responder, app.isAllowedOrigin, app.infoLog).
+		WithState(authState)
 
 	return app
 }

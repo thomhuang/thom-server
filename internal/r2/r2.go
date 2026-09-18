@@ -92,7 +92,6 @@ func (c Config) baseURL() string {
 	return fmt.Sprintf("https://%s.r2.cloudflarestorage.com", c.AccountID)
 }
 
-// Client signs requests for one bucket.
 type Client struct {
 	config Config
 	now    func() time.Time

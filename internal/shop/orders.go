@@ -128,8 +128,7 @@ func (m *Model) GetOrderBySessionID(sessionID string) (*Order, error) {
 	return order, nil
 }
 
-// ListOrders returns orders newest first for the admin view. Lines are loaded
-// separately by GetOrderBySessionID to keep the list query flat.
+// ListOrders returns orders newest first with their lines, for the admin view.
 func (m *Model) ListOrders() ([]*Order, error) {
 	rows, err := m.DB.Query(
 		`SELECT id, StripeSessionID, Status, CustomerEmail, CustomerName,
@@ -143,6 +142,7 @@ func (m *Model) ListOrders() ([]*Order, error) {
 	defer rows.Close()
 
 	orders := make([]*Order, 0)
+	orderIDs := make([]int, 0)
 	for rows.Next() {
 		order := &Order{}
 		var orderID int
@@ -164,10 +164,25 @@ func (m *Model) ListOrders() ([]*Order, error) {
 
 		order.ID = strconv.Itoa(orderID)
 		orders = append(orders, order)
+		orderIDs = append(orderIDs, orderID)
 	}
 
 	if err = rows.Err(); err != nil {
 		return nil, err
+	}
+
+	// Lines are loaded after the list cursor is closed: the pool can be a
+	// single connection, so a nested query while rows are open would block.
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+
+	for index, orderID := range orderIDs {
+		lines, err := m.getOrderLines(orderID)
+		if err != nil {
+			return nil, err
+		}
+		orders[index].Lines = lines
 	}
 
 	return orders, nil

@@ -37,6 +37,37 @@ func TestInsertPendingOrderSnapshotsLines(t *testing.T) {
 	}
 }
 
+func TestListOrdersIncludesLinesNewestFirst(t *testing.T) {
+	model := newTestModel(t)
+
+	if _, err := model.InsertPendingOrder("cs_first", &Order{
+		Currency: "usd",
+		Lines:    []*OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 2}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.InsertPendingOrder("cs_second", &Order{
+		Currency: "usd",
+		Lines:    []*OrderLine{{ItemID: "2", Title: "Test beans", UnitPriceCents: 2200, Quantity: 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	orders, err := model.ListOrders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orders) != 2 {
+		t.Fatalf("len(orders) = %d, want 2", len(orders))
+	}
+	if orders[0].StripeSessionID != "cs_second" {
+		t.Fatalf("first order = %q, want the newest cs_second", orders[0].StripeSessionID)
+	}
+	if len(orders[0].Lines) != 1 || orders[0].Lines[0].Title != "Test beans" {
+		t.Fatalf("lines = %+v, want the newest order's line", orders[0].Lines)
+	}
+}
+
 func TestGetOrderBySessionIDReportsMissing(t *testing.T) {
 	model := newTestModel(t)
 

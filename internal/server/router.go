@@ -21,7 +21,7 @@ func (app *App) routes() *http.ServeMux {
 
 	mux.HandleFunc("GET /ping", app.ping)
 
-	mux.HandleFunc("POST /auth/login", app.auth.Login)
+	mux.HandleFunc("POST /auth/login", app.requireAllowedOrigin(app.auth.Login))
 	mux.HandleFunc("POST /auth/logout", app.auth.RequireAuth(app.auth.Logout))
 	mux.HandleFunc("GET /auth/me", app.auth.RequireAuth(app.auth.GetCurrentUser))
 
@@ -46,7 +46,7 @@ func (app *App) routes() *http.ServeMux {
 	mux.HandleFunc("POST /shop/items/{id}/images", app.auth.RequireAuth(shopHandler.CreateImage))
 	mux.HandleFunc("DELETE /shop/items/{id}/images/{imageId}", app.auth.RequireAuth(shopHandler.DeleteImage))
 
-	mux.HandleFunc("POST /shop/checkout", shopHandler.Checkout)
+	mux.HandleFunc("POST /shop/checkout", app.requireAllowedOrigin(app.limitCheckout(shopHandler.Checkout)))
 	mux.HandleFunc("GET /shop/orders", app.auth.RequireAuth(shopHandler.ListOrders))
 	mux.HandleFunc("GET /shop/orders/{sessionId}", shopHandler.GetOrder)
 	mux.HandleFunc("POST /shop/webhooks/stripe", shopHandler.StripeWebhook)
