@@ -12,11 +12,22 @@ import (
 	"thom-server/internal/clientip"
 )
 
-func (h *Handler) authConfigured() bool {
-	return h.config.AdminUsername != "" &&
-		h.config.AdminPasswordHash != "" &&
-		isValidPasswordHash(h.config.AdminPasswordHash) &&
-		h.config.JWTSecret != ""
+// authConfigIssue names the setting that leaves login unavailable, or returns
+// an empty string when auth is configured. It never includes a secret value, so
+// it is safe to log and lets an operator fix a 503 from the logs alone.
+func (h *Handler) authConfigIssue() string {
+	switch {
+	case h.config.AdminUsername == "":
+		return "ADMIN_USERNAME is not set"
+	case h.config.AdminPasswordHash == "":
+		return "ADMIN_PASSWORD_HASH is not set"
+	case !isValidPasswordHash(h.config.AdminPasswordHash):
+		return "ADMIN_PASSWORD_HASH is not a valid bcrypt hash"
+	case h.config.JWTSecret == "":
+		return "JWT_SECRET is not set"
+	}
+
+	return ""
 }
 
 func isValidPasswordHash(hash string) bool {
@@ -24,17 +35,20 @@ func isValidPasswordHash(hash string) bool {
 	return err == nil
 }
 
-func (h *Handler) validLoginCredentials(request loginRequest) bool {
-	usernameMatches := subtle.ConstantTimeCompare(
+// credentialMatch reports which half of the login matched. Logging the two
+// booleans distinguishes a wrong username from a wrong password without ever
+// recording the submitted password.
+func (h *Handler) credentialMatch(request loginRequest) (usernameMatch, passwordMatch bool) {
+	usernameMatch = subtle.ConstantTimeCompare(
 		[]byte(request.Username),
 		[]byte(h.config.AdminUsername),
 	) == 1
-	passwordMatches := bcrypt.CompareHashAndPassword(
+	passwordMatch = bcrypt.CompareHashAndPassword(
 		[]byte(h.config.AdminPasswordHash),
 		[]byte(request.Password),
 	) == nil
 
-	return usernameMatches && passwordMatches
+	return usernameMatch, passwordMatch
 }
 
 func loginThrottleKey(r *http.Request, username string) string {

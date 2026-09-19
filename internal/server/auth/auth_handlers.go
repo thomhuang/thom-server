@@ -8,13 +8,15 @@ import (
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if !h.authConfigured() {
+	if issue := h.authConfigIssue(); issue != "" {
+		h.infoLog.Printf("LOGIN unavailable: %s", issue)
 		h.clientError(w, http.StatusServiceUnavailable)
 		return
 	}
 
 	var request loginRequest
 	if err := h.responder.DecodeJSON(w, r.Body, &request); err != nil {
+		h.infoLog.Printf("LOGIN failed to decode JSON: %v", err)
 		h.clientError(w, http.StatusBadRequest)
 		return
 	}
@@ -33,11 +35,17 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.validLoginCredentials(request) {
+	usernameMatch, passwordMatch := h.credentialMatch(request)
+	if !usernameMatch || !passwordMatch {
 		if err := h.state.RecordLoginFailure(throttleKey); err != nil {
 			h.infoLog.Printf("LOGIN failed to record attempt: %v", err)
 		}
-		h.infoLog.Printf("LOGIN failed invalid credentials %s", throttleKey)
+		h.infoLog.Printf(
+			"LOGIN failed invalid credentials %s usernameMatch=%t passwordMatch=%t",
+			throttleKey,
+			usernameMatch,
+			passwordMatch,
+		)
 		h.clientError(w, http.StatusUnauthorized)
 		return
 	}

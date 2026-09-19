@@ -1,12 +1,16 @@
 package auth
 
 import (
+	"bytes"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"thom-server/internal/server/response"
 )
@@ -107,6 +111,95 @@ func TestAuthCookieAttributes(t *testing.T) {
 				t.Errorf("path = %q, want /", cookie.Path)
 			}
 		})
+	}
+}
+
+func TestAuthConfigIssue(t *testing.T) {
+	validHash, err := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name   string
+		config Config
+		want   string
+	}{
+		{
+			name:   "missing username",
+			config: Config{AdminPasswordHash: string(validHash), JWTSecret: "x"},
+			want:   "ADMIN_USERNAME is not set",
+		},
+		{
+			name:   "missing hash",
+			config: Config{AdminUsername: "admin", JWTSecret: "x"},
+			want:   "ADMIN_PASSWORD_HASH is not set",
+		},
+		{
+			name:   "invalid hash",
+			config: Config{AdminUsername: "admin", AdminPasswordHash: "not-a-hash", JWTSecret: "x"},
+			want:   "ADMIN_PASSWORD_HASH is not a valid bcrypt hash",
+		},
+		{
+			name:   "missing jwt secret",
+			config: Config{AdminUsername: "admin", AdminPasswordHash: string(validHash)},
+			want:   "JWT_SECRET is not set",
+		},
+		{
+			name:   "configured",
+			config: Config{AdminUsername: "admin", AdminPasswordHash: string(validHash), JWTSecret: "x"},
+			want:   "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := newTestAuthHandler(tc.config).authConfigIssue(); got != tc.want {
+				t.Errorf("authConfigIssue() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoginLogsWhyItIsUnavailable(t *testing.T) {
+	var logs bytes.Buffer
+	handler := New(Config{}, response.Responder{}, nil, log.New(&logs, "", 0))
+
+	recorder := httptest.NewRecorder()
+	body := strings.NewReader(`{"username":"admin","password":"password"}`)
+	handler.Login(recorder, httptest.NewRequest(http.MethodPost, "/auth/login", body))
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(logs.String(), "ADMIN_USERNAME is not set") {
+		t.Fatalf("logs = %q, want the missing setting named", logs.String())
+	}
+}
+
+func TestLoginLogsWhichCredentialFailed(t *testing.T) {
+	validHash, err := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	handler := New(
+		Config{AdminUsername: "admin", AdminPasswordHash: string(validHash), JWTSecret: "test-secret"},
+		response.Responder{},
+		nil,
+		log.New(&logs, "", 0),
+	)
+
+	recorder := httptest.NewRecorder()
+	body := strings.NewReader(`{"username":"admin","password":"wrong"}`)
+	handler.Login(recorder, httptest.NewRequest(http.MethodPost, "/auth/login", body))
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
+	if !strings.Contains(logs.String(), "usernameMatch=true passwordMatch=false") {
+		t.Fatalf("logs = %q, want the mismatching credential named", logs.String())
 	}
 }
 
