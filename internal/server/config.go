@@ -44,6 +44,10 @@ type EmailConfig struct {
 	// SiteURL is where an emailed order link points. It defaults to the first
 	// client origin, so no extra variable is required.
 	SiteURL string
+	// NotificationEmail receives a copy of every paid order so the operator
+	// learns about a sale without polling the orders page. It is optional: when
+	// empty, no notification is sent.
+	NotificationEmail string
 }
 
 // minJWTSecretLength is the shortest signing secret the server accepts. A short
@@ -145,11 +149,12 @@ func EmailConfigFromEnv(clientOrigins []string) EmailConfig {
 	}
 
 	return EmailConfig{
-		APIToken:  strings.TrimSpace(os.Getenv("EMAIL_API_TOKEN")),
-		AccountID: strings.TrimSpace(os.Getenv("EMAIL_ACCOUNT_ID")),
-		From:      strings.TrimSpace(os.Getenv("EMAIL_FROM")),
-		FromName:  strings.TrimSpace(os.Getenv("EMAIL_FROM_NAME")),
-		SiteURL:   siteURL,
+		APIToken:          strings.TrimSpace(os.Getenv("EMAIL_API_TOKEN")),
+		AccountID:         strings.TrimSpace(os.Getenv("EMAIL_ACCOUNT_ID")),
+		From:              strings.TrimSpace(os.Getenv("EMAIL_FROM")),
+		FromName:          strings.TrimSpace(os.Getenv("EMAIL_FROM_NAME")),
+		SiteURL:           siteURL,
+		NotificationEmail: strings.TrimSpace(os.Getenv("ORDER_NOTIFICATION_EMAIL")),
 	}
 }
 

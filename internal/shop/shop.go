@@ -40,20 +40,31 @@ type Item struct {
 	Description string `json:"description"`
 	BrandID     string `json:"brandId"`
 	Brand       string `json:"brand"`
+	// Category is a free-form hint (for example "tops" or "pants") that the
+	// storefront uses to suggest measurement labels. It is not enforced against a
+	// fixed set, so a listing can always be filed under something new.
+	Category    string `json:"category"`
 	PriceCents  int    `json:"priceCents"`
 	Currency    string `json:"currency"`
 	Stock       int    `json:"stock"`
 	IsPublished bool   `json:"isPublished"`
-	// Garment measurements in inches, for clothing listings. They are optional:
-	// a listing for anything that is not clothing simply leaves them at zero,
-	// which is why zero means "not provided" rather than a real measurement.
-	// The UI converts to centimetres for display.
-	PitToPitInches   float64  `json:"pitToPitInches"`
-	BackLengthInches float64  `json:"backLengthInches"`
-	ShoulderInches   float64  `json:"shoulderInches"`
-	Images           []*Image `json:"images"`
-	CreatedAt        string   `json:"createdAt,omitempty"`
-	UpdatedAt        string   `json:"updatedAt,omitempty"`
+	// Measurements are arbitrary garment measurements in inches. They are stored
+	// as rows rather than columns so a listing can carry any set of labels; an
+	// absent measurement is simply a missing row. The UI converts to centimetres
+	// for display.
+	Measurements []*Measurement `json:"measurements"`
+	Images       []*Image       `json:"images"`
+	CreatedAt    string         `json:"createdAt,omitempty"`
+	UpdatedAt    string         `json:"updatedAt,omitempty"`
+}
+
+// Measurement is one labelled garment measurement in inches. Label is free-form
+// data, not a key into a fixed vocabulary, so "Waist" and "Inseam" need no
+// schema change to exist.
+type Measurement struct {
+	ID          string  `json:"id,omitempty"`
+	Label       string  `json:"label"`
+	ValueInches float64 `json:"valueInches"`
 }
 
 // ItemSummary is the list representation. PrimaryImageKey stays internal so the
@@ -93,13 +104,11 @@ func (m *Model) EnsureSchema() error {
 			Description TEXT NOT NULL DEFAULT '',
 			BrandID TEXT NOT NULL DEFAULT '',
 			Brand TEXT NOT NULL DEFAULT '',
+			Category TEXT NOT NULL DEFAULT '',
 			PriceCents INTEGER NOT NULL DEFAULT 0,
 			Currency TEXT NOT NULL DEFAULT 'usd',
 			Stock INTEGER NOT NULL DEFAULT 0,
 			IsPublished INTEGER NOT NULL DEFAULT 0,
-			PitToPitInches REAL NOT NULL DEFAULT 0,
-			BackLengthInches REAL NOT NULL DEFAULT 0,
-			ShoulderInches REAL NOT NULL DEFAULT 0,
 			CreatedAt TEXT NOT NULL DEFAULT (datetime('now')),
 			UpdatedAt TEXT NOT NULL DEFAULT (datetime('now'))
 		);
@@ -121,6 +130,17 @@ func (m *Model) EnsureSchema() error {
 
 		CREATE INDEX IF NOT EXISTS ShopItemImagesItemIndex
 		ON ShopItemImages(ItemID, SortOrder ASC, id ASC);
+
+		CREATE TABLE IF NOT EXISTS ShopItemMeasurements (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ItemID INTEGER NOT NULL REFERENCES ShopItems(id) ON DELETE CASCADE,
+			Label TEXT NOT NULL,
+			ValueInches REAL NOT NULL,
+			CreatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+
+		CREATE INDEX IF NOT EXISTS ShopItemMeasurementsItemIndex
+		ON ShopItemMeasurements(ItemID, id ASC);
 
 		CREATE TABLE IF NOT EXISTS ShopOrders (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -189,17 +209,25 @@ func (m *Model) EnsureSchema() error {
 	return err
 }
 
-// ensureShopItemColumns adds listing columns that predate the current schema.
+// ensureShopItemColumns adds listing columns that predate the current schema and
+// retires the flat measurement columns that the ShopItemMeasurements table
+// replaced.
 func (m *Model) ensureShopItemColumns() error {
-	return data.EnsureColumns(m.DB, "ShopItems", []data.Column{
+	if err := data.EnsureColumns(m.DB, "ShopItems", []data.Column{
 		{Name: "BrandID", Definition: "BrandID TEXT NOT NULL DEFAULT ''"},
 		{Name: "Brand", Definition: "Brand TEXT NOT NULL DEFAULT ''"},
-		// Optional garment measurements in inches. REAL so a half inch is exact
-		// enough; 0 means the listing has no measurement.
-		{Name: "PitToPitInches", Definition: "PitToPitInches REAL NOT NULL DEFAULT 0"},
-		{Name: "BackLengthInches", Definition: "BackLengthInches REAL NOT NULL DEFAULT 0"},
-		{Name: "ShoulderInches", Definition: "ShoulderInches REAL NOT NULL DEFAULT 0"},
-	})
+		{Name: "Category", Definition: "Category TEXT NOT NULL DEFAULT ''"},
+	}); err != nil {
+		return err
+	}
+
+	return data.DropColumns(
+		m.DB,
+		"ShopItems",
+		"PitToPitInches",
+		"BackLengthInches",
+		"ShoulderInches",
+	)
 }
 
 // ensureShopOrderColumns adds order shipping and refund columns that predate
@@ -279,8 +307,7 @@ func (m *Model) GetItems(includeUnpublished bool) ([]*ItemSummary, error) {
 // GetItemByID returns one listing with its images in display order.
 func (m *Model) GetItemByID(id int) (*Item, error) {
 	stmt := `
-		SELECT id, Title, Description, BrandID, Brand, PriceCents, Currency, Stock, IsPublished,
-			PitToPitInches, BackLengthInches, ShoulderInches,
+		SELECT id, Title, Description, BrandID, Brand, Category, PriceCents, Currency, Stock, IsPublished,
 			CreatedAt, UpdatedAt
 		FROM ShopItems
 		WHERE id = ?`
@@ -294,13 +321,11 @@ func (m *Model) GetItemByID(id int) (*Item, error) {
 		&item.Description,
 		&item.BrandID,
 		&item.Brand,
+		&item.Category,
 		&item.PriceCents,
 		&item.Currency,
 		&item.Stock,
 		&isPublished,
-		&item.PitToPitInches,
-		&item.BackLengthInches,
-		&item.ShoulderInches,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	)
@@ -310,6 +335,12 @@ func (m *Model) GetItemByID(id int) (*Item, error) {
 
 	item.ID = strconv.Itoa(itemID)
 	item.IsPublished = isPublished != 0
+
+	measurements, err := m.getMeasurements(itemID)
+	if err != nil {
+		return nil, err
+	}
+	item.Measurements = measurements
 
 	images, err := m.getImages(itemID)
 	if err != nil {
@@ -329,9 +360,8 @@ func (m *Model) InsertItem(item *Item) (*Item, error) {
 	item.Brand = brand.Brand
 
 	stmt := `
-		INSERT INTO ShopItems (Title, Description, BrandID, Brand, PriceCents, Currency, Stock, IsPublished,
-			PitToPitInches, BackLengthInches, ShoulderInches)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		INSERT INTO ShopItems (Title, Description, BrandID, Brand, Category, PriceCents, Currency, Stock, IsPublished)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	result, err := m.DB.Exec(
 		stmt,
@@ -339,13 +369,11 @@ func (m *Model) InsertItem(item *Item) (*Item, error) {
 		item.Description,
 		item.BrandID,
 		item.Brand,
+		item.Category,
 		item.PriceCents,
 		currencyOr(item.Currency),
 		item.Stock,
 		boolToInt(item.IsPublished),
-		item.PitToPitInches,
-		item.BackLengthInches,
-		item.ShoulderInches,
 	)
 	if err != nil {
 		return nil, err
@@ -353,6 +381,10 @@ func (m *Model) InsertItem(item *Item) (*Item, error) {
 
 	id, err := result.LastInsertId()
 	if err != nil {
+		return nil, err
+	}
+
+	if err = m.replaceMeasurements(int(id), item.Measurements); err != nil {
 		return nil, err
 	}
 
@@ -373,13 +405,11 @@ func (m *Model) UpdateItem(id int, item *Item) (*Item, error) {
 			Description = ?,
 			BrandID = ?,
 			Brand = ?,
+			Category = ?,
 			PriceCents = ?,
 			Currency = ?,
 			Stock = ?,
 			IsPublished = ?,
-			PitToPitInches = ?,
-			BackLengthInches = ?,
-			ShoulderInches = ?,
 			UpdatedAt = datetime('now')
 		WHERE id = ?`
 
@@ -389,13 +419,11 @@ func (m *Model) UpdateItem(id int, item *Item) (*Item, error) {
 		item.Description,
 		item.BrandID,
 		item.Brand,
+		item.Category,
 		item.PriceCents,
 		currencyOr(item.Currency),
 		item.Stock,
 		boolToInt(item.IsPublished),
-		item.PitToPitInches,
-		item.BackLengthInches,
-		item.ShoulderInches,
 		id,
 	)
 	if err != nil {
@@ -408,6 +436,10 @@ func (m *Model) UpdateItem(id int, item *Item) (*Item, error) {
 	}
 	if rowsAffected == 0 {
 		return nil, data.ErrNoRecord
+	}
+
+	if err = m.replaceMeasurements(id, item.Measurements); err != nil {
+		return nil, err
 	}
 
 	return m.GetItemByID(id)
@@ -550,6 +582,63 @@ func (m *Model) getImageByID(id int) (*Image, error) {
 	image.ID = strconv.Itoa(imageID)
 
 	return image, nil
+}
+
+// getMeasurements returns a listing's measurements in the order they were saved.
+func (m *Model) getMeasurements(itemID int) ([]*Measurement, error) {
+	rows, err := m.DB.Query(
+		`SELECT id, Label, ValueInches
+		 FROM ShopItemMeasurements
+		 WHERE ItemID = ?
+		 ORDER BY id ASC`,
+		itemID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	measurements := make([]*Measurement, 0)
+	for rows.Next() {
+		measurement := &Measurement{}
+		var id int
+
+		if err = rows.Scan(&id, &measurement.Label, &measurement.ValueInches); err != nil {
+			return nil, err
+		}
+
+		measurement.ID = strconv.Itoa(id)
+		measurements = append(measurements, measurement)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return measurements, nil
+}
+
+// replaceMeasurements swaps a listing's whole measurement set for the given
+// rows. D1 has no interactive transactions, so this deletes then inserts; the
+// statements are independent, which is acceptable because the rows are derived
+// from a request that is retried as a whole.
+func (m *Model) replaceMeasurements(itemID int, measurements []*Measurement) error {
+	if _, err := m.DB.Exec(`DELETE FROM ShopItemMeasurements WHERE ItemID = ?`, itemID); err != nil {
+		return err
+	}
+
+	for _, measurement := range measurements {
+		if _, err := m.DB.Exec(
+			`INSERT INTO ShopItemMeasurements (ItemID, Label, ValueInches) VALUES (?, ?, ?)`,
+			itemID,
+			measurement.Label,
+			measurement.ValueInches,
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (m *Model) GetBrands() ([]*Brand, error) {

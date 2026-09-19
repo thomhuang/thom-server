@@ -235,7 +235,7 @@ func TestStripeConfigFromEnv(t *testing.T) {
 
 func TestEmailConfigFromEnv(t *testing.T) {
 	origins := []string{"https://example.com/"}
-	restoreEnv(t, "EMAIL_API_TOKEN", "EMAIL_ACCOUNT_ID", "EMAIL_FROM", "EMAIL_FROM_NAME", "PUBLIC_SITE_URL")
+	restoreEnv(t, "EMAIL_API_TOKEN", "EMAIL_ACCOUNT_ID", "EMAIL_FROM", "EMAIL_FROM_NAME", "PUBLIC_SITE_URL", "ORDER_NOTIFICATION_EMAIL")
 
 	t.Run("trims values and defaults the site url to the first origin", func(t *testing.T) {
 		t.Setenv("EMAIL_API_TOKEN", " token ")
@@ -270,6 +270,14 @@ func TestEmailConfigFromEnv(t *testing.T) {
 
 		if got := EmailConfigFromEnv(nil).SiteURL; got != "" {
 			t.Fatalf("SiteURL = %q, want empty without an origin", got)
+		}
+	})
+
+	t.Run("reads the operator notification address", func(t *testing.T) {
+		t.Setenv("ORDER_NOTIFICATION_EMAIL", " owner@example.com ")
+
+		if got := EmailConfigFromEnv(origins).NotificationEmail; got != "owner@example.com" {
+			t.Fatalf("NotificationEmail = %q, want the trimmed address", got)
 		}
 	})
 }

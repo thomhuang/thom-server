@@ -18,7 +18,8 @@ func (app *App) routes() *http.ServeMux {
 			SuccessURL:    app.config.Stripe.SuccessURL,
 			CancelURL:     app.config.Stripe.CancelURL,
 		}).
-		WithMailer(app.mailer, app.config.Email.SiteURL)
+		WithMailer(app.mailer, app.config.Email.SiteURL).
+		WithOrderNotifications(app.config.Email.NotificationEmail)
 
 	mux.HandleFunc("GET /ping", app.ping)
 

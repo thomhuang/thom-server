@@ -27,7 +27,10 @@ const (
 
 	// maxMeasurementInches bounds a garment measurement. It is far above any real
 	// garment, so it only catches obvious typos and unit mix-ups.
-	maxMeasurementInches = 100.0
+	maxMeasurementInches      = 100.0
+	maxMeasurementLabelLength = 60
+	maxItemMeasurements       = 20
+	maxCategoryLength         = 40
 )
 
 // allowedImageTypes maps an accepted upload type to the stored file extension.
@@ -48,15 +51,16 @@ type ImageStore interface {
 }
 
 type Handler struct {
-	shop           *shopdata.Model
-	images         ImageStore
-	publicURL      string
-	stripe         StripeClient
-	stripeSettings StripeSettings
-	mailer         mail.Sender
-	siteURL        string
-	responder      response.Responder
-	infoLog        *log.Logger
+	shop              *shopdata.Model
+	images            ImageStore
+	publicURL         string
+	stripe            StripeClient
+	stripeSettings    StripeSettings
+	mailer            mail.Sender
+	siteURL           string
+	notificationEmail string
+	responder         response.Responder
+	infoLog           *log.Logger
 }
 
 func New(model *shopdata.Model, images ImageStore, publicURL string, responder response.Responder, infoLog *log.Logger) *Handler {
@@ -78,14 +82,14 @@ type itemPatch struct {
 	Description *string `json:"description"`
 	BrandID     *string `json:"brandId"`
 	Brand       *string `json:"brand"`
+	Category    *string `json:"category"`
 	PriceCents  *int    `json:"priceCents"`
 	Currency    *string `json:"currency"`
 	Stock       *int    `json:"stock"`
 	IsPublished *bool   `json:"isPublished"`
-	// Pointers so an omitted field leaves the stored measurement untouched.
-	PitToPitInches   *float64 `json:"pitToPitInches"`
-	BackLengthInches *float64 `json:"backLengthInches"`
-	ShoulderInches   *float64 `json:"shoulderInches"`
+	// A pointer so an omitted field leaves the stored measurements untouched; an
+	// empty array clears them.
+	Measurements *[]*shopdata.Measurement `json:"measurements"`
 }
 
 type presignRequest struct {
@@ -495,11 +499,10 @@ func normalizeItem(item *shopdata.Item) {
 	item.Description = strings.TrimSpace(item.Description)
 	item.BrandID = strings.TrimSpace(item.BrandID)
 	item.Brand = strings.TrimSpace(item.Brand)
+	item.Category = strings.TrimSpace(item.Category)
 	item.Currency = strings.ToLower(strings.TrimSpace(item.Currency))
 
-	item.PitToPitInches = roundToTenth(item.PitToPitInches)
-	item.BackLengthInches = roundToTenth(item.BackLengthInches)
-	item.ShoulderInches = roundToTenth(item.ShoulderInches)
+	item.Measurements = normalizeMeasurements(item.Measurements)
 
 	if item.Brand == "" {
 		item.BrandID = ""
@@ -510,6 +513,38 @@ func normalizeItem(item *shopdata.Item) {
 	if item.Currency == "" {
 		item.Currency = shopdata.DefaultCurrency
 	}
+}
+
+// normalizeMeasurements trims labels, rounds values to a tenth, drops blank
+// labels, and keeps only the first row for a repeated label so what is stored
+// matches what the admin form shows.
+func normalizeMeasurements(measurements []*shopdata.Measurement) []*shopdata.Measurement {
+	normalized := make([]*shopdata.Measurement, 0, len(measurements))
+	seen := make(map[string]bool, len(measurements))
+
+	for _, measurement := range measurements {
+		if measurement == nil {
+			continue
+		}
+
+		label := strings.TrimSpace(measurement.Label)
+		if label == "" {
+			continue
+		}
+
+		key := strings.ToLower(label)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		normalized = append(normalized, &shopdata.Measurement{
+			Label:       label,
+			ValueInches: roundToTenth(measurement.ValueInches),
+		})
+	}
+
+	return normalized
 }
 
 func applyItemPatch(item *shopdata.Item, patch *itemPatch) {
@@ -528,6 +563,9 @@ func applyItemPatch(item *shopdata.Item, patch *itemPatch) {
 	if patch.BrandID != nil {
 		item.BrandID = *patch.BrandID
 	}
+	if patch.Category != nil {
+		item.Category = *patch.Category
+	}
 	if patch.PriceCents != nil {
 		item.PriceCents = *patch.PriceCents
 	}
@@ -540,14 +578,8 @@ func applyItemPatch(item *shopdata.Item, patch *itemPatch) {
 	if patch.IsPublished != nil {
 		item.IsPublished = *patch.IsPublished
 	}
-	if patch.PitToPitInches != nil {
-		item.PitToPitInches = *patch.PitToPitInches
-	}
-	if patch.BackLengthInches != nil {
-		item.BackLengthInches = *patch.BackLengthInches
-	}
-	if patch.ShoulderInches != nil {
-		item.ShoulderInches = *patch.ShoulderInches
+	if patch.Measurements != nil {
+		item.Measurements = *patch.Measurements
 	}
 }
 
@@ -577,31 +609,54 @@ func isValidItem(item *shopdata.Item) error {
 	if !validCurrency(item.Currency) {
 		return fmt.Errorf("invalid currency %q", item.Currency)
 	}
-	if err := validMeasurement("pitToPitInches", item.PitToPitInches); err != nil {
-		return err
+	if len([]rune(item.Category)) > maxCategoryLength {
+		return fmt.Errorf("category must be at most %d characters", maxCategoryLength)
 	}
-	if err := validMeasurement("backLengthInches", item.BackLengthInches); err != nil {
-		return err
-	}
-	if err := validMeasurement("shoulderInches", item.ShoulderInches); err != nil {
+	if err := validMeasurements(item.Measurements); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// validMeasurement accepts 0 (meaning "not provided") or a plausible garment
-// measurement in inches. NaN and infinity would otherwise reach the database and
-// break JSON encoding.
-func validMeasurement(name string, value float64) error {
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return fmt.Errorf("%s must be a finite number", name)
+// validMeasurements bounds the number of rows and validates each label and
+// value. Absence is expressed by omitting a row, so there is no zero sentinel.
+func validMeasurements(measurements []*shopdata.Measurement) error {
+	if len(measurements) > maxItemMeasurements {
+		return fmt.Errorf("at most %d measurements are allowed, got %d", maxItemMeasurements, len(measurements))
 	}
-	if value < 0 {
-		return fmt.Errorf("%s must be non-negative, got %v", name, value)
+
+	for _, measurement := range measurements {
+		if measurement == nil {
+			return errors.New("measurement must not be null")
+		}
+
+		label := strings.TrimSpace(measurement.Label)
+		if label == "" {
+			return errors.New("measurement label is required")
+		}
+		if len([]rune(label)) > maxMeasurementLabelLength {
+			return fmt.Errorf("measurement label must be at most %d characters", maxMeasurementLabelLength)
+		}
+		if err := validMeasurementValue(label, measurement.ValueInches); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validMeasurementValue accepts a plausible garment measurement in inches. NaN
+// and infinity would otherwise reach the database and break JSON encoding.
+func validMeasurementValue(label string, value float64) error {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return fmt.Errorf("%s must be a finite number", label)
+	}
+	if value <= 0 {
+		return fmt.Errorf("%s must be greater than zero, got %v", label, value)
 	}
 	if value > maxMeasurementInches {
-		return fmt.Errorf("%s must be at most %v inches, got %v", name, maxMeasurementInches, value)
+		return fmt.Errorf("%s must be at most %v inches, got %v", label, maxMeasurementInches, value)
 	}
 
 	return nil

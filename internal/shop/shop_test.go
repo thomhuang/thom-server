@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -17,6 +18,70 @@ func TestModelEnsureSchemaIsIdempotent(t *testing.T) {
 	if err := model.EnsureSchema(); err != nil {
 		t.Fatalf("second EnsureSchema failed: %v", err)
 	}
+}
+
+func TestModelEnsureSchemaDropsLegacyMeasurementColumns(t *testing.T) {
+	model := newTestModel(t)
+
+	// Simulate a database created before measurements moved into their own
+	// table. Fresh test schemas never have these columns, so without this the
+	// DropColumns path would never run.
+	for _, statement := range []string{
+		"ALTER TABLE ShopItems ADD COLUMN PitToPitInches REAL NOT NULL DEFAULT 0",
+		"ALTER TABLE ShopItems ADD COLUMN BackLengthInches REAL NOT NULL DEFAULT 0",
+		"ALTER TABLE ShopItems ADD COLUMN ShoulderInches REAL NOT NULL DEFAULT 0",
+	} {
+		if _, err := model.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := model.EnsureSchema(); err != nil {
+		t.Fatalf("EnsureSchema failed: %v", err)
+	}
+
+	columns := shopItemColumns(t, model.DB)
+	for _, legacy := range []string{"PitToPitInches", "BackLengthInches", "ShoulderInches"} {
+		if columns[legacy] {
+			t.Fatalf("legacy column %s still present after EnsureSchema", legacy)
+		}
+	}
+	if !columns["Category"] {
+		t.Fatal("Category column is missing after EnsureSchema")
+	}
+}
+
+// shopItemColumns returns the column names currently on ShopItems.
+func shopItemColumns(t *testing.T, db *sql.DB) map[string]bool {
+	t.Helper()
+
+	rows, err := db.Query(`PRAGMA table_info(ShopItems)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var (
+			cid          int
+			name         string
+			columnType   string
+			notNull      int
+			defaultValue sql.NullString
+			primaryKey   int
+		)
+
+		if err = rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		columns[name] = true
+	}
+	if err = rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	return columns
 }
 
 func TestModelGetItemsHidesUnpublishedByDefault(t *testing.T) {
@@ -238,27 +303,33 @@ func TestModelMeasurementRoundTripPreservesDecimal(t *testing.T) {
 	model := newTestModel(t)
 
 	created, err := model.InsertItem(&Item{
-		Title:            "Clothing listing",
-		PriceCents:       1800,
-		Currency:         "usd",
-		Stock:            1,
-		PitToPitInches:   24.5,
-		BackLengthInches: 22.5,
-		ShoulderInches:   18.25,
+		Title:      "Clothing listing",
+		Category:   "pants",
+		PriceCents: 1800,
+		Currency:   "usd",
+		Stock:      1,
+		Measurements: []*Measurement{
+			{Label: "Waist", ValueInches: 24.5},
+			{Label: "Inseam", ValueInches: 22.5},
+			// 18.25 is stored exactly even though the UI only shows one decimal.
+			{Label: "Rise", ValueInches: 18.25},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if created.PitToPitInches != 24.5 {
-		t.Fatalf("pit-to-pit = %v, want 24.5", created.PitToPitInches)
+	if got := measurementValue(created, "Waist"); got != 24.5 {
+		t.Fatalf("waist = %v, want 24.5", got)
 	}
-	if created.BackLengthInches != 22.5 {
-		t.Fatalf("back length = %v, want 22.5", created.BackLengthInches)
+	if got := measurementValue(created, "Inseam"); got != 22.5 {
+		t.Fatalf("inseam = %v, want 22.5", got)
 	}
-	// 18.25 is stored exactly even though the UI only shows one decimal.
-	if created.ShoulderInches != 18.25 {
-		t.Fatalf("shoulder = %v, want 18.25", created.ShoulderInches)
+	if got := measurementValue(created, "Rise"); got != 18.25 {
+		t.Fatalf("rise = %v, want 18.25", got)
+	}
+	if created.Category != "pants" {
+		t.Fatalf("category = %q, want pants", created.Category)
 	}
 
 	reloadedID, err := strconv.Atoi(created.ID)
@@ -270,16 +341,15 @@ func TestModelMeasurementRoundTripPreservesDecimal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.PitToPitInches != 24.5 || reloaded.BackLengthInches != 22.5 {
-		t.Fatalf(
-			"reloaded measurements = %v/%v, want 24.5/22.5",
-			reloaded.PitToPitInches,
-			reloaded.BackLengthInches,
-		)
+	if got := measurementValue(reloaded, "Waist"); got != 24.5 {
+		t.Fatalf("reloaded waist = %v, want 24.5", got)
+	}
+	if got := measurementValue(reloaded, "Inseam"); got != 22.5 {
+		t.Fatalf("reloaded inseam = %v, want 22.5", got)
 	}
 }
 
-func TestModelMeasurementsDefaultToZero(t *testing.T) {
+func TestModelMeasurementsDefaultToEmpty(t *testing.T) {
 	model := newTestModel(t)
 
 	// A non-clothing listing simply omits the measurements.
@@ -293,17 +363,12 @@ func TestModelMeasurementsDefaultToZero(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if created.PitToPitInches != 0 || created.BackLengthInches != 0 || created.ShoulderInches != 0 {
-		t.Fatalf(
-			"expected zero measurements, got %v/%v/%v",
-			created.PitToPitInches,
-			created.BackLengthInches,
-			created.ShoulderInches,
-		)
+	if len(created.Measurements) != 0 {
+		t.Fatalf("measurements = %+v, want none", created.Measurements)
 	}
 }
 
-func TestModelUpdateItemPersistsMeasurements(t *testing.T) {
+func TestModelUpdateItemReplacesMeasurements(t *testing.T) {
 	model := newTestModel(t)
 
 	item, err := model.GetItemByID(1)
@@ -311,25 +376,43 @@ func TestModelUpdateItemPersistsMeasurements(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	item.PitToPitInches = 21.5
-	item.BackLengthInches = 27.5
-	item.ShoulderInches = 19.5
+	item.Measurements = []*Measurement{
+		{Label: "Waist", ValueInches: 21.5},
+		{Label: "Inseam", ValueInches: 27.5},
+	}
 
 	updated, err := model.UpdateItem(1, item)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if updated.PitToPitInches != 21.5 ||
-		updated.BackLengthInches != 27.5 ||
-		updated.ShoulderInches != 19.5 {
-		t.Fatalf(
-			"updated measurements = %v/%v/%v, want 21.5/27.5/19.5",
-			updated.PitToPitInches,
-			updated.BackLengthInches,
-			updated.ShoulderInches,
-		)
+	if got := measurementValue(updated, "Waist"); got != 21.5 {
+		t.Fatalf("waist = %v, want 21.5", got)
 	}
+	if got := measurementValue(updated, "Inseam"); got != 27.5 {
+		t.Fatalf("inseam = %v, want 27.5", got)
+	}
+
+	// A later update with an empty set clears them.
+	updated.Measurements = nil
+	cleared, err := model.UpdateItem(1, updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cleared.Measurements) != 0 {
+		t.Fatalf("measurements = %+v, want cleared", cleared.Measurements)
+	}
+}
+
+// measurementValue returns the stored value for a label, or -1 when absent.
+func measurementValue(item *Item, label string) float64 {
+	for _, measurement := range item.Measurements {
+		if strings.EqualFold(measurement.Label, label) {
+			return measurement.ValueInches
+		}
+	}
+
+	return -1
 }
 
 func TestModelGetBrands(t *testing.T) {

@@ -176,18 +176,28 @@ list live in `D:\Repos\BOARD.md`; this section only records durable gotchas.
   prepared bytes; the 50 MB source ceiling only guards against decode hangs.
   Because compression can change the type, the server must sign the *prepared*
   content type. GIFs are passed through untouched to preserve animation.
-- **Garment measurements (inches) — backend done, UI pending.** `ShopItems` has
-  three optional columns, all `REAL NOT NULL DEFAULT 0`:
-  `PitToPitInches`, `BackLengthInches`, `ShoulderInches`. `0` means "not
-  provided" — a non-clothing listing simply leaves them at zero, and the API
-  always emits all three. API field names are camelCase:
-  `pitToPitInches`, `backLengthInches`, `shoulderInches`. They are accepted on
-  `POST /shop/items` (all three optional) and `PATCH /shop/items/{id}` (omitted
-  leaves the stored value untouched). Values are rounded to **one decimal**
-  server-side (24.46 → 24.5), so the UI should display one decimal; accepted
-  range is 0–100 inches, and negative/NaN/Inf are rejected with 400. Storage is
-  inches; the UI is expected to convert to cm for display. `GetItems` summaries
-  do **not** include measurements — only `GET /shop/items/{id}` does.
+- **Garment measurements are open-ended rows, not columns.** `ShopItems` has a
+  free-form `Category` (a UI hint such as `pants`), and measurements live in
+  `ShopItemMeasurements (ItemID, Label, ValueInches)`, one row per measurement in
+  insertion order — the same child-table pattern as images. Any label is allowed
+  (`Waist`, `Inseam`, `Pit to pit`, …), so a new garment type needs no schema
+  change. API shape is `category: string` plus
+  `measurements: [{ label, valueInches }]`, accepted on `POST /shop/items` and
+  `PATCH /shop/items/{id}`. On PATCH, an omitted `measurements` leaves the stored
+  set untouched and an empty array clears it; otherwise the whole set is
+  replaced. Values are inches, rounded to **one decimal** server-side (24.46 →
+  24.5), range `0 < v ≤ 100`; labels are 1–60 chars, unique per item
+  (case-insensitive), max 20 rows. `0` is no longer valid — absence is a missing
+  row. The retired `PitToPitInches`/`BackLengthInches`/`ShoulderInches` columns
+  are dropped by `ensureShopItemColumns` via `data.DropColumns`. `GetItems`
+  summaries include neither category nor measurements — only `GET /shop/items/{id}`
+  does.
+- **Operator order notification.** The Stripe webhook sends a best-effort copy of
+  every paid, non-oversold order to `ORDER_NOTIFICATION_EMAIL`. It is a plain
+  address kept out of `wrangler.jsonc`; set it per Worker with
+  `npx wrangler secret put ORDER_NOTIFICATION_EMAIL`. Unset means disabled. The
+  buyer email and the operator copy are independent, and a failure of either is
+  logged rather than returned so Stripe does not redeliver.
 - **`go test ./...` fails under Windows Smart App Control** ("An Application
   Control policy has blocked this file") because test binaries in the temp build
   dir are blocked. Workaround: `go test -c -o
@@ -195,13 +205,18 @@ list live in `D:\Repos\BOARD.md`; this section only records durable gotchas.
 
 ## Garment measurements reference (2026-09-18)
 
-| Column (D1) | JSON field | Meaning |
-|---|---|---|
-| `PitToPitInches` | `pitToPitInches` | Chest width, seam to seam |
-| `BackLengthInches` | `backLengthInches` | Collar seam to hem, down the back |
-| `ShoulderInches` | `shoulderInches` | Shoulder seam to shoulder seam |
+Measurements are open-ended. `ShopItemMeasurements` stores one `(Label,
+ValueInches)` row per measurement per item, so a listing can carry any labels and
+a new garment type needs no schema change. `ShopItems.Category` is a free-form
+hint (`tops`, `pants`, `outerwear`, …) that only drives the admin form's
+suggested labels; it is not enforced.
 
-All three are `REAL NOT NULL DEFAULT 0`; `0` means "not provided", so a
-non-clothing listing leaves them at zero. Added to existing databases by
-`ensureShopItemColumns` in `internal/shop/shop.go` via `ALTER TABLE ADD COLUMN`
-guards — no migration file, existing rows default to `0`.
+| JSON field | Meaning |
+|---|---|
+| `category` | Free-form garment hint (e.g. `pants`); UI suggestion only |
+| `measurements[].label` | Any label, 1–60 chars, unique per item (case-insensitive) |
+| `measurements[].valueInches` | Inches, `0 < v ≤ 100`, rounded to one decimal |
+
+Absence is a missing row — there is no zero sentinel. `ensureShopItemColumns` in
+`internal/shop/shop.go` creates the table and drops the legacy flat columns
+(`PitToPitInches`, `BackLengthInches`, `ShoulderInches`) via `data.DropColumns`.

@@ -90,21 +90,45 @@ func TestIsValidItem(t *testing.T) {
 		{name: "uppercase currency", mutate: func(i *shopdata.Item) { i.Currency = "USD" }, valid: false},
 		{name: "long title", mutate: func(i *shopdata.Item) { i.Title = strings.Repeat("a", maxTitleLength+1) }, valid: false},
 		{name: "decimal measurements", mutate: func(i *shopdata.Item) {
-			i.PitToPitInches = 24.5
-			i.BackLengthInches = 22.5
-			i.ShoulderInches = 18.25
+			i.Measurements = []*shopdata.Measurement{
+				{Label: "Waist", ValueInches: 24.5},
+				{Label: "Inseam", ValueInches: 22.5},
+			}
 		}, valid: true},
 		{name: "omitted measurements are allowed", mutate: func(i *shopdata.Item) {
-			i.PitToPitInches = 0
-			i.BackLengthInches = 0
-			i.ShoulderInches = 0
+			i.Measurements = nil
 		}, valid: true},
-		{name: "negative pit-to-pit", mutate: func(i *shopdata.Item) { i.PitToPitInches = -1 }, valid: false},
-		{name: "negative back length", mutate: func(i *shopdata.Item) { i.BackLengthInches = -0.5 }, valid: false},
-		{name: "negative shoulder", mutate: func(i *shopdata.Item) { i.ShoulderInches = -24.5 }, valid: false},
-		{name: "absurd measurement", mutate: func(i *shopdata.Item) { i.PitToPitInches = maxMeasurementInches + 1 }, valid: false},
-		{name: "NaN measurement", mutate: func(i *shopdata.Item) { i.PitToPitInches = math.NaN() }, valid: false},
-		{name: "infinite measurement", mutate: func(i *shopdata.Item) { i.BackLengthInches = math.Inf(1) }, valid: false},
+		{name: "zero measurement is rejected", mutate: func(i *shopdata.Item) {
+			i.Measurements = []*shopdata.Measurement{{Label: "Waist", ValueInches: 0}}
+		}, valid: false},
+		{name: "negative measurement", mutate: func(i *shopdata.Item) {
+			i.Measurements = []*shopdata.Measurement{{Label: "Waist", ValueInches: -1}}
+		}, valid: false},
+		{name: "absurd measurement", mutate: func(i *shopdata.Item) {
+			i.Measurements = []*shopdata.Measurement{{Label: "Waist", ValueInches: maxMeasurementInches + 1}}
+		}, valid: false},
+		{name: "NaN measurement", mutate: func(i *shopdata.Item) {
+			i.Measurements = []*shopdata.Measurement{{Label: "Waist", ValueInches: math.NaN()}}
+		}, valid: false},
+		{name: "infinite measurement", mutate: func(i *shopdata.Item) {
+			i.Measurements = []*shopdata.Measurement{{Label: "Inseam", ValueInches: math.Inf(1)}}
+		}, valid: false},
+		{name: "blank measurement label", mutate: func(i *shopdata.Item) {
+			i.Measurements = []*shopdata.Measurement{{Label: "  ", ValueInches: 10}}
+		}, valid: false},
+		{name: "long measurement label", mutate: func(i *shopdata.Item) {
+			i.Measurements = []*shopdata.Measurement{{
+				Label:       strings.Repeat("a", maxMeasurementLabelLength+1),
+				ValueInches: 10,
+			}}
+		}, valid: false},
+		{name: "too many measurements", mutate: func(i *shopdata.Item) {
+			measurements := make([]*shopdata.Measurement, maxItemMeasurements+1)
+			for n := range measurements {
+				measurements[n] = &shopdata.Measurement{Label: "Waist", ValueInches: 10}
+			}
+			i.Measurements = measurements
+		}, valid: false},
 	}
 
 	for _, testCase := range testCases {
@@ -246,31 +270,57 @@ func TestCreateItem(t *testing.T) {
 
 func TestNormalizeItemRoundsMeasurementsToOneDecimal(t *testing.T) {
 	item := &shopdata.Item{
-		Title:            "Jacket",
-		PriceCents:       1000,
-		PitToPitInches:   24.46,
-		BackLengthInches: 22.55,
-		ShoulderInches:   18.04,
+		Title:      "Jacket",
+		PriceCents: 1000,
+		Measurements: []*shopdata.Measurement{
+			{Label: "  Pit to pit  ", ValueInches: 24.46},
+			{Label: "Back length", ValueInches: 22.55},
+			{Label: "Shoulder", ValueInches: 18.04},
+		},
 	}
 
 	normalizeItem(item)
 
-	if item.PitToPitInches != 24.5 {
-		t.Fatalf("pit-to-pit = %v, want 24.5", item.PitToPitInches)
+	if len(item.Measurements) != 3 {
+		t.Fatalf("measurements = %+v, want 3 rows", item.Measurements)
 	}
-	if item.BackLengthInches != 22.6 {
-		t.Fatalf("back length = %v, want 22.6", item.BackLengthInches)
+	if got := measurementByLabel(t, item.Measurements, "Pit to pit").ValueInches; got != 24.5 {
+		t.Fatalf("pit-to-pit = %v, want 24.5", got)
 	}
-	if item.ShoulderInches != 18 {
-		t.Fatalf("shoulder = %v, want 18", item.ShoulderInches)
+	if got := measurementByLabel(t, item.Measurements, "Back length").ValueInches; got != 22.6 {
+		t.Fatalf("back length = %v, want 22.6", got)
+	}
+	if got := measurementByLabel(t, item.Measurements, "Shoulder").ValueInches; got != 18 {
+		t.Fatalf("shoulder = %v, want 18", got)
 	}
 }
 
-func TestCreateItemAcceptsDecimalMeasurements(t *testing.T) {
+func TestNormalizeMeasurementsDropsBlanksAndDuplicates(t *testing.T) {
+	item := &shopdata.Item{
+		Measurements: []*shopdata.Measurement{
+			{Label: "Waist", ValueInches: 31},
+			{Label: "   ", ValueInches: 10},
+			{Label: "waist", ValueInches: 99},
+			nil,
+			{Label: "Inseam", ValueInches: 30},
+		},
+	}
+
+	normalizeItem(item)
+
+	if len(item.Measurements) != 2 {
+		t.Fatalf("measurements = %+v, want 2 rows", item.Measurements)
+	}
+	if got := measurementByLabel(t, item.Measurements, "Waist").ValueInches; got != 31 {
+		t.Fatalf("waist = %v, want the first value 31", got)
+	}
+}
+
+func TestCreateItemAcceptsMeasurements(t *testing.T) {
 	handler, _ := newTestHandler(t)
 
-	body := `{"title":"Denim jacket","priceCents":8500,"stock":1,"currency":"usd",` +
-		`"pitToPitInches":24.5,"backLengthInches":22.5,"shoulderInches":18.25}`
+	body := `{"title":"Denim jacket","category":"tops","priceCents":8500,"stock":1,"currency":"usd",` +
+		`"measurements":[{"label":"Pit to pit","valueInches":24.5},{"label":"Shoulder","valueInches":18.25}]}`
 	rr := serve(handler.CreateItem, http.MethodPost, "/shop/items", body)
 
 	if rr.Code != http.StatusCreated {
@@ -281,18 +331,18 @@ func TestCreateItemAcceptsDecimalMeasurements(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.PitToPitInches != 24.5 {
-		t.Fatalf("pitToPitInches = %v, want 24.5", created.PitToPitInches)
+	if created.Category != "tops" {
+		t.Fatalf("category = %q, want tops", created.Category)
 	}
-	if created.BackLengthInches != 22.5 {
-		t.Fatalf("backLengthInches = %v, want 22.5", created.BackLengthInches)
+	if got := measurementByLabel(t, created.Measurements, "Pit to pit").ValueInches; got != 24.5 {
+		t.Fatalf("pit to pit = %v, want 24.5", got)
 	}
-	if created.ShoulderInches != 18.3 {
-		t.Fatalf("shoulderInches = %v, want 18.3 (18.25 rounds to one decimal)", created.ShoulderInches)
+	if got := measurementByLabel(t, created.Measurements, "Shoulder").ValueInches; got != 18.3 {
+		t.Fatalf("shoulder = %v, want 18.3 (18.25 rounds to one decimal)", got)
 	}
 }
 
-func TestCreateItemWithoutMeasurementsLeavesThemZero(t *testing.T) {
+func TestCreateItemWithoutMeasurementsLeavesThemEmpty(t *testing.T) {
 	handler, _ := newTestHandler(t)
 
 	// A listing that is not clothing omits the measurements entirely.
@@ -307,32 +357,27 @@ func TestCreateItemWithoutMeasurementsLeavesThemZero(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.PitToPitInches != 0 || created.BackLengthInches != 0 || created.ShoulderInches != 0 {
-		t.Fatalf(
-			"expected zero measurements, got %v/%v/%v",
-			created.PitToPitInches,
-			created.BackLengthInches,
-			created.ShoulderInches,
-		)
+	if len(created.Measurements) != 0 {
+		t.Fatalf("measurements = %+v, want none", created.Measurements)
 	}
 }
 
-func TestUpdateItemRejectsNegativeMeasurement(t *testing.T) {
+func TestUpdateItemRejectsNonPositiveMeasurement(t *testing.T) {
 	handler, _ := newTestHandler(t)
 
 	rr := serve(handler.UpdateItem, http.MethodPatch, "/shop/items/1",
-		`{"pitToPitInches":-24.5}`, "id", "1")
+		`{"measurements":[{"label":"Waist","valueInches":0}]}`, "id", "1")
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d (%s)", http.StatusBadRequest, rr.Code, rr.Body.String())
 	}
 }
 
-func TestUpdateItemAcceptsDecimalMeasurement(t *testing.T) {
+func TestUpdateItemReplacesMeasurements(t *testing.T) {
 	handler, _ := newTestHandler(t)
 
 	rr := serve(handler.UpdateItem, http.MethodPatch, "/shop/items/1",
-		`{"pitToPitInches":21.5,"backLengthInches":27.5,"shoulderInches":19.5}`, "id", "1")
+		`{"measurements":[{"label":"Waist","valueInches":21.5},{"label":"Inseam","valueInches":27.5}]}`, "id", "1")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d (%s)", http.StatusOK, rr.Code, rr.Body.String())
@@ -342,14 +387,76 @@ func TestUpdateItemAcceptsDecimalMeasurement(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &updated); err != nil {
 		t.Fatal(err)
 	}
-	if updated.PitToPitInches != 21.5 || updated.BackLengthInches != 27.5 || updated.ShoulderInches != 19.5 {
-		t.Fatalf(
-			"measurements = %v/%v/%v, want 21.5/27.5/19.5",
-			updated.PitToPitInches,
-			updated.BackLengthInches,
-			updated.ShoulderInches,
-		)
+	if got := measurementByLabel(t, updated.Measurements, "Waist").ValueInches; got != 21.5 {
+		t.Fatalf("waist = %v, want 21.5", got)
 	}
+	if got := measurementByLabel(t, updated.Measurements, "Inseam").ValueInches; got != 27.5 {
+		t.Fatalf("inseam = %v, want 27.5", got)
+	}
+}
+
+func TestUpdateItemOmittingMeasurementsPreservesThem(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	seed := serve(handler.UpdateItem, http.MethodPatch, "/shop/items/1",
+		`{"measurements":[{"label":"Waist","valueInches":31}]}`, "id", "1")
+	if seed.Code != http.StatusOK {
+		t.Fatalf("seed status = %d (%s)", seed.Code, seed.Body.String())
+	}
+
+	rr := serve(handler.UpdateItem, http.MethodPatch, "/shop/items/1", `{"title":"Renamed"}`, "id", "1")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d (%s)", http.StatusOK, rr.Code, rr.Body.String())
+	}
+
+	var updated shopdata.Item
+	if err := json.Unmarshal(rr.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Renamed" {
+		t.Fatalf("title = %q, want Renamed", updated.Title)
+	}
+	if got := measurementByLabel(t, updated.Measurements, "Waist").ValueInches; got != 31 {
+		t.Fatalf("waist = %v, want the preserved 31", got)
+	}
+}
+
+func TestUpdateItemEmptyMeasurementsClearsThem(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	seed := serve(handler.UpdateItem, http.MethodPatch, "/shop/items/1",
+		`{"measurements":[{"label":"Waist","valueInches":31}]}`, "id", "1")
+	if seed.Code != http.StatusOK {
+		t.Fatalf("seed status = %d (%s)", seed.Code, seed.Body.String())
+	}
+
+	rr := serve(handler.UpdateItem, http.MethodPatch, "/shop/items/1", `{"measurements":[]}`, "id", "1")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d (%s)", http.StatusOK, rr.Code, rr.Body.String())
+	}
+
+	var updated shopdata.Item
+	if err := json.Unmarshal(rr.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Measurements) != 0 {
+		t.Fatalf("measurements = %+v, want cleared", updated.Measurements)
+	}
+}
+
+// measurementByLabel returns the row for a label, failing the test if it is
+// absent.
+func measurementByLabel(t *testing.T, measurements []*shopdata.Measurement, label string) *shopdata.Measurement {
+	t.Helper()
+
+	for _, measurement := range measurements {
+		if strings.EqualFold(measurement.Label, label) {
+			return measurement
+		}
+	}
+
+	t.Fatalf("measurement %q not found in %+v", label, measurements)
+	return nil
 }
 
 func TestCreateItemRejectsInvalidPayload(t *testing.T) {
