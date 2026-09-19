@@ -63,7 +63,7 @@ func (h *Handler) GetEntries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = h.responder.WriteJSON(w, http.StatusOK, entries, nil); err != nil {
+	if err = h.responder.WriteJSON(w, http.StatusOK, entries, response.PublicCache()); err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}
@@ -80,7 +80,7 @@ func (h *Handler) GetEntryByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = h.responder.WriteJSON(w, http.StatusOK, entry, nil); err != nil {
+	if err = h.responder.WriteJSON(w, http.StatusOK, entry, response.PublicCache()); err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}
@@ -93,7 +93,7 @@ func (h *Handler) GetRoasters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = h.responder.WriteJSON(w, http.StatusOK, roasters, nil); err != nil {
+	if err = h.responder.WriteJSON(w, http.StatusOK, roasters, response.PublicCache()); err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}
@@ -135,7 +135,7 @@ func (h *Handler) GetGrinders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = h.responder.WriteJSON(w, http.StatusOK, grinders, nil); err != nil {
+	if err = h.responder.WriteJSON(w, http.StatusOK, grinders, response.PublicCache()); err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}

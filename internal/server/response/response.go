@@ -8,9 +8,30 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strconv"
+	"time"
 )
 
 const maxJSONBodySize = 1 << 20
+
+// publicCacheMaxAge bounds how long a shared cache may serve an anonymous public
+// response. It is short so price and stock staleness stays small.
+const publicCacheMaxAge = 30 * time.Second
+
+// PublicCache returns the Cache-Control header for a shared-cacheable public
+// GET response.
+func PublicCache() http.Header {
+	return http.Header{
+		"Cache-Control": {"public, max-age=" + strconv.Itoa(int(publicCacheMaxAge/time.Second))},
+	}
+}
+
+// NoStore returns the Cache-Control header for a response that must never be
+// cached.
+func NoStore() http.Header {
+	return http.Header{
+		"Cache-Control": {"no-store"},
+	}
+}
 
 type Responder struct {
 	ErrorLog *log.Logger

@@ -15,6 +15,7 @@ import (
 	"github.com/stripe/stripe-go/v86/webhook"
 
 	"thom-server/internal/mail"
+	"thom-server/internal/server/response"
 	shopdata "thom-server/internal/shop"
 )
 
@@ -226,7 +227,7 @@ func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 		RefundedAt:       order.RefundedAt,
 		CreatedAt:        order.CreatedAt,
 		UpdatedAt:        order.UpdatedAt,
-	}, nil); err != nil {
+	}, response.NoStore()); err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}

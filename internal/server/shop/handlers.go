@@ -124,7 +124,12 @@ func (h *Handler) GetItems(w http.ResponseWriter, r *http.Request) {
 		item.PrimaryImageURL = h.publicImageURL(item.PrimaryImageKey)
 	}
 
-	if err = h.responder.WriteJSON(w, http.StatusOK, items, nil); err != nil {
+	headers := response.PublicCache()
+	if authhttp.IsAuthenticated(r) {
+		headers = response.NoStore()
+	}
+
+	if err = h.responder.WriteJSON(w, http.StatusOK, items, headers); err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}
@@ -148,7 +153,12 @@ func (h *Handler) GetItemByID(w http.ResponseWriter, r *http.Request) {
 
 	h.decorateImages(item)
 
-	if err = h.responder.WriteJSON(w, http.StatusOK, item, nil); err != nil {
+	headers := response.PublicCache()
+	if authhttp.IsAuthenticated(r) {
+		headers = response.NoStore()
+	}
+
+	if err = h.responder.WriteJSON(w, http.StatusOK, item, headers); err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}
@@ -161,7 +171,7 @@ func (h *Handler) GetBrands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = h.responder.WriteJSON(w, http.StatusOK, brands, nil); err != nil {
+	if err = h.responder.WriteJSON(w, http.StatusOK, brands, response.PublicCache()); err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}
