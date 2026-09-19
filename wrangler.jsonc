@@ -42,6 +42,6 @@
     "EMAIL_FROM_NAME": "Thom Huang",
     "PUBLIC_SITE_URL": "https://www.thomhuang.com",
     "STRIPE_TAX_ENABLED": "false",
-    "STRIPE_SHIPPING_CENTS": "0"
+    "STRIPE_SHIPPING_CENTS": "1000"
   }
 }

@@ -186,16 +186,19 @@ func TestStripeConfigFromEnv(t *testing.T) {
 		wantShipping  int
 	}{
 		{
-			name: "defaults",
+			name:         "defaults to flat shipping",
+			wantShipping: 1000,
 		},
 		{
-			name:       "tax enabled",
-			taxEnabled: "true",
-			wantTax:    true,
+			name:         "tax enabled",
+			taxEnabled:   "true",
+			wantTax:      true,
+			wantShipping: 1000,
 		},
 		{
-			name:       "tax disabled",
-			taxEnabled: "false",
+			name:         "tax disabled",
+			taxEnabled:   "false",
+			wantShipping: 1000,
 		},
 		{
 			name:          "shipping cents parsed",
@@ -203,11 +206,15 @@ func TestStripeConfigFromEnv(t *testing.T) {
 			wantShipping:  500,
 		},
 		{
-			// A non-numeric value silently falls back to 0; this pins that
-			// current behavior rather than asserting it is desirable.
-			name:          "non-numeric shipping falls back to zero",
-			shippingCents: "abc",
+			name:          "explicit zero disables shipping",
+			shippingCents: "0",
 			wantShipping:  0,
+		},
+		{
+			// A non-numeric value falls back to the default flat rate.
+			name:          "non-numeric shipping falls back to default",
+			shippingCents: "abc",
+			wantShipping:  1000,
 		},
 	}
 

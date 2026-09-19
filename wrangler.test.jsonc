@@ -41,7 +41,7 @@
     "EMAIL_FROM_NAME": "Thom Huang",
     "PUBLIC_SITE_URL": "https://thom-website-test.thomhuang.workers.dev",
     "SECURE_COOKIES": "true",
-    "STRIPE_SHIPPING_CENTS": "0",
+    "STRIPE_SHIPPING_CENTS": "1000",
     "STRIPE_TAX_ENABLED": "false"
   }
 }

@@ -22,7 +22,7 @@ R2_PUBLIC_BASE_URL=https://pub-9a8dcf30844143e6a0515c4feb4987f9.r2.dev
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 STRIPE_TAX_ENABLED=false
-STRIPE_SHIPPING_CENTS=0
+STRIPE_SHIPPING_CENTS=1000
 
 # Cloudflare Email Service (buyer order links) and operator notifications.
 # EMAIL_API_TOKEN is a secret; order email and notifications stay disabled until

@@ -116,6 +116,11 @@ func R2PublicBaseURLFromEnv() string {
 	return strings.TrimSpace(os.Getenv("R2_PUBLIC_BASE_URL"))
 }
 
+// defaultShippingCents is the flat US shipping charge used when
+// STRIPE_SHIPPING_CENTS is unset or unparseable. Set the variable to 0
+// explicitly to offer free shipping.
+const defaultShippingCents = 1000
+
 // StripeConfigFromEnv reads the Checkout settings. Success and cancel URLs are
 // derived from the first client origin so the browser returns to the website
 // rather than the API. Stripe Tax stays off unless explicitly enabled, because
@@ -126,7 +131,12 @@ func StripeConfigFromEnv(clientOrigins []string) StripeConfig {
 		origin = strings.TrimSuffix(strings.TrimSpace(clientOrigins[0]), "/")
 	}
 
-	shippingCents, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("STRIPE_SHIPPING_CENTS")))
+	shippingCents := defaultShippingCents
+	if raw := strings.TrimSpace(os.Getenv("STRIPE_SHIPPING_CENTS")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			shippingCents = parsed
+		}
+	}
 
 	return StripeConfig{
 		SecretKey:     strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY")),
