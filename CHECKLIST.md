@@ -21,11 +21,17 @@ dated note when something changes.
 
 ## Cloudflare / Stripe / email
 
-- [ ] Onboard `thomhuang.com` for Email Sending (dashboard: Compute & AI →
+- [x] Onboard `thomhuang.com` for Email Sending (dashboard: Compute & AI →
       Email Service → Email Sending → Onboard Domain; adds SPF/DKIM). Until
       then, buyer order emails only reach verified destination addresses.
-- [ ] Set `EMAIL_API_TOKEN` and `ORDER_NOTIFICATION_EMAIL` Worker secrets on
-      **both** `thom-server` and `thom-server-test` (secrets are per-Worker).
+      (2026-09-19: already done 2026-09-18 — zone enabled with DKIM
+      `cf-bounce`, bounce MX, DMARC reject; the dashboard "subdomain already
+      exists" error was the onboarding flow refusing an already-onboarded
+      domain.)
+- [ ] Set `ORDER_NOTIFICATION_EMAIL` on production `thom-server`
+      (2026-09-19: `EMAIL_API_TOKEN` is set on both Workers and
+      `ORDER_NOTIFICATION_EMAIL` on the test Worker; only the production
+      operator-notification secret is missing).
 - [ ] Verify the remaining secrets on both Workers: `ADMIN_USERNAME`,
       `ADMIN_PASSWORD_HASH`, `JWT_SECRET`, `CF_API_TOKEN`, `R2_ACCESS_KEY_ID`,
       `R2_SECRET_ACCESS_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
@@ -35,7 +41,12 @@ dated note when something changes.
       manually with `npx wrangler deploy`.
 - [ ] Verify the Stripe webhook endpoint (`/shop/webhooks/stripe`) subscribes
       to `checkout.session.completed` in both live and test mode with the
-      matching signing secret.
+      matching signing secret. (2026-09-19: sandbox test-mode endpoints for
+      `thom-server` and `thom-server-test` subscribe to
+      `checkout.session.completed` **and** `checkout.session.expired`; the
+      live endpoint was created in Workbench with both events. Remaining:
+      confirm its signing secret matches the production
+      `STRIPE_WEBHOOK_SECRET` Worker secret.)
 
 ## Website repo (thom-website)
 
@@ -48,6 +59,10 @@ dated note when something changes.
       Checkout Session is created (conditional decrement, loser gets 409),
       30-minute hold via `ExpiresAt`, release on `checkout.session.expired`,
       `StockReserved` column so pre-existing pending orders keep the legacy
-      decrement-at-webhook path. Requires enabling
-      `checkout.session.expired` in the Stripe webhook subscription and a small
-      admin-UI change for the new `expired` order status.
+      decrement-at-webhook path. (2026-09-19: implemented and tested in
+      `internal/shop`/`internal/server/shop` — checkout reserves stock with a
+      30-minute session expiry, `checkout.session.expired` and a lazy sweep
+      release it, and insert failure restores stock and expires the session.
+      The thom-website admin-UI change for the `expired` status is also done
+      (uncommitted in both repos). Remaining: deploy both repos, add
+      `checkout.session.expired` to the **live** Stripe webhook endpoints.)

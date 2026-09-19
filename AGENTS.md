@@ -84,6 +84,8 @@ For local authenticated routes, keep the **non-secret** values in `.env.local` (
 
 Use standard Go formatting: run `gofmt` on changed `.go` files before committing. Keep package names short and lowercase. Export only types or methods used across packages, such as `coffee.Model` and `server.App`; keep route handlers descriptive and action-oriented, such as `CreateEntry`. Prefer small helpers in focused `internal/server` packages when behavior is shared by handlers.
 
+Keep comments to a minimum: write them only when they clarify something ambiguous or that is not clear from the code itself, not to restate it.
+
 ## Testing Guidelines
 
 Place tests next to the code they cover using Go's standard `testing` package and name files `*_test.go`. Prefer table-driven tests for handlers, auth/config helpers, and model methods. For database behavior, use in-memory SQLite databases and the existing test helper patterns; the D1 driver tests use a fake HTTP endpoint and need no CGO. Run `go test ./...` before opening a PR.
@@ -131,7 +133,7 @@ section only records durable gotchas; operator action items live in
   `cursor` is the keyset of the previous page, not an offset. This replaced the
   old bare-array response, so the website admin page must send/consume the
   wrapper. Order `status` is one of `pending`, `paid`, `refund_pending`,
-  `refunded`. `ShopOrders` carries structured `ShipName`/`ShipLine1`/`ShipLine2`/
+  `refunded`, `expired`. `ShopOrders` carries structured `ShipName`/`ShipLine1`/`ShipLine2`/
   `ShipCity`/`ShipState`/`ShipPostalCode`/`ShipCountry` (plus the legacy formatted
   `ShippingAddress`), and `RefundedAt`/`RefundReason`; `ensureShopOrderColumns`
   adds them to existing databases. A `refund_pending` order means a refund was
@@ -140,6 +142,20 @@ section only records durable gotchas; operator action items live in
   `MarkOrderPaid` only transitions `pending` → `paid`, so a redelivered
   `checkout.session.completed` event can never revive a `refunded` or
   `refund_pending` order (which would re-decrement stock and re-send email).
+- **Stock reservation at checkout (2026-09-19).** `POST /shop/checkout`
+  decrements stock when the Checkout Session is created (conditional UPDATE,
+  loser gets 409) and records `StockReserved=1` plus a 30-minute hold in
+  `ShopOrders.ExpiresAt` (unix seconds); the session's `expires_at` is set to
+  match. The hold is released by the `checkout.session.expired` webhook (order
+  → `expired`, stock restored once — `MarkOrderExpired` only transitions
+  `pending`) and by a lazy sweep (`ReleaseExpiredReservations`) that runs on
+  every checkout, so a missed webhook cannot strand stock. On
+  `checkout.session.completed`, reserved orders skip the decrement-at-webhook
+  path; pre-reservation orders (`StockReserved=0`) keep it. If the order row
+  cannot be written after the reservation, stock is restored and the session
+  expired so it can never be paid unreserved. Requires
+  `checkout.session.expired` in the Stripe webhook subscription and a
+  thom-website admin-UI change for the `expired` status.
 - **`GET /shop/orders/{sessionId}` is public and returns no personal data.** It
   serves the buyer's confirmation page, keyed only on the Stripe session id, so
   it returns status/total/lines and omits customer name, email, and every
