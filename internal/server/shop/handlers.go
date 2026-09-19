@@ -31,6 +31,7 @@ const (
 	maxMeasurementLabelLength = 60
 	maxItemMeasurements       = 20
 	maxCategoryLength         = 40
+	maxSizeLength             = 40
 )
 
 // allowedImageTypes maps an accepted upload type to the stored file extension.
@@ -83,6 +84,7 @@ type itemPatch struct {
 	BrandID     *string `json:"brandId"`
 	Brand       *string `json:"brand"`
 	Category    *string `json:"category"`
+	Size        *string `json:"size"`
 	PriceCents  *int    `json:"priceCents"`
 	Currency    *string `json:"currency"`
 	Stock       *int    `json:"stock"`
@@ -516,6 +518,7 @@ func normalizeItem(item *shopdata.Item) {
 	item.BrandID = strings.TrimSpace(item.BrandID)
 	item.Brand = strings.TrimSpace(item.Brand)
 	item.Category = strings.TrimSpace(item.Category)
+	item.Size = strings.TrimSpace(item.Size)
 	item.Currency = strings.ToLower(strings.TrimSpace(item.Currency))
 
 	item.Measurements = normalizeMeasurements(item.Measurements)
@@ -582,6 +585,9 @@ func applyItemPatch(item *shopdata.Item, patch *itemPatch) {
 	if patch.Category != nil {
 		item.Category = *patch.Category
 	}
+	if patch.Size != nil {
+		item.Size = *patch.Size
+	}
 	if patch.PriceCents != nil {
 		item.PriceCents = *patch.PriceCents
 	}
@@ -627,6 +633,9 @@ func isValidItem(item *shopdata.Item) error {
 	}
 	if len([]rune(item.Category)) > maxCategoryLength {
 		return fmt.Errorf("category must be at most %d characters", maxCategoryLength)
+	}
+	if len([]rune(item.Size)) > maxSizeLength {
+		return fmt.Errorf("size must be at most %d characters", maxSizeLength)
 	}
 	if err := validMeasurements(item.Measurements); err != nil {
 		return err

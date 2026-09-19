@@ -43,7 +43,10 @@ type Item struct {
 	// Category is a free-form hint (for example "tops" or "pants") that the
 	// storefront uses to suggest measurement labels. It is not enforced against a
 	// fixed set, so a listing can always be filed under something new.
-	Category    string `json:"category"`
+	Category string `json:"category"`
+	// Size is a free-form label (for example "Large" or "36x32") shown on the
+	// listing. Like Category, it is not validated against a fixed vocabulary.
+	Size        string `json:"size"`
 	PriceCents  int    `json:"priceCents"`
 	Currency    string `json:"currency"`
 	Stock       int    `json:"stock"`
@@ -105,6 +108,7 @@ func (m *Model) EnsureSchema() error {
 			BrandID TEXT NOT NULL DEFAULT '',
 			Brand TEXT NOT NULL DEFAULT '',
 			Category TEXT NOT NULL DEFAULT '',
+			Size TEXT NOT NULL DEFAULT '',
 			PriceCents INTEGER NOT NULL DEFAULT 0,
 			Currency TEXT NOT NULL DEFAULT 'usd',
 			Stock INTEGER NOT NULL DEFAULT 0,
@@ -217,6 +221,7 @@ func (m *Model) ensureShopItemColumns() error {
 		{Name: "BrandID", Definition: "BrandID TEXT NOT NULL DEFAULT ''"},
 		{Name: "Brand", Definition: "Brand TEXT NOT NULL DEFAULT ''"},
 		{Name: "Category", Definition: "Category TEXT NOT NULL DEFAULT ''"},
+		{Name: "Size", Definition: "Size TEXT NOT NULL DEFAULT ''"},
 	}); err != nil {
 		return err
 	}
@@ -307,7 +312,7 @@ func (m *Model) GetItems(includeUnpublished bool) ([]*ItemSummary, error) {
 // GetItemByID returns one listing with its images in display order.
 func (m *Model) GetItemByID(id int) (*Item, error) {
 	stmt := `
-		SELECT id, Title, Description, BrandID, Brand, Category, PriceCents, Currency, Stock, IsPublished,
+		SELECT id, Title, Description, BrandID, Brand, Category, Size, PriceCents, Currency, Stock, IsPublished,
 			CreatedAt, UpdatedAt
 		FROM ShopItems
 		WHERE id = ?`
@@ -322,6 +327,7 @@ func (m *Model) GetItemByID(id int) (*Item, error) {
 		&item.BrandID,
 		&item.Brand,
 		&item.Category,
+		&item.Size,
 		&item.PriceCents,
 		&item.Currency,
 		&item.Stock,
@@ -379,8 +385,8 @@ func (m *Model) InsertItem(item *Item) (*Item, error) {
 	item.Brand = brand.Brand
 
 	stmt := `
-		INSERT INTO ShopItems (Title, Description, BrandID, Brand, Category, PriceCents, Currency, Stock, IsPublished)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		INSERT INTO ShopItems (Title, Description, BrandID, Brand, Category, Size, PriceCents, Currency, Stock, IsPublished)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	result, err := m.DB.Exec(
 		stmt,
@@ -389,6 +395,7 @@ func (m *Model) InsertItem(item *Item) (*Item, error) {
 		item.BrandID,
 		item.Brand,
 		item.Category,
+		item.Size,
 		item.PriceCents,
 		currencyOr(item.Currency),
 		item.Stock,
@@ -425,6 +432,7 @@ func (m *Model) UpdateItem(id int, item *Item) (*Item, error) {
 			BrandID = ?,
 			Brand = ?,
 			Category = ?,
+			Size = ?,
 			PriceCents = ?,
 			Currency = ?,
 			Stock = ?,
@@ -439,6 +447,7 @@ func (m *Model) UpdateItem(id int, item *Item) (*Item, error) {
 		item.BrandID,
 		item.Brand,
 		item.Category,
+		item.Size,
 		item.PriceCents,
 		currencyOr(item.Currency),
 		item.Stock,

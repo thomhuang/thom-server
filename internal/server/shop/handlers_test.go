@@ -319,7 +319,7 @@ func TestNormalizeMeasurementsDropsBlanksAndDuplicates(t *testing.T) {
 func TestCreateItemAcceptsMeasurements(t *testing.T) {
 	handler, _ := newTestHandler(t)
 
-	body := `{"title":"Denim jacket","category":"tops","priceCents":8500,"stock":1,"currency":"usd",` +
+	body := `{"title":"Denim jacket","category":"tops","size":"Large","priceCents":8500,"stock":1,"currency":"usd",` +
 		`"measurements":[{"label":"Pit to pit","valueInches":24.5},{"label":"Shoulder","valueInches":18.25}]}`
 	rr := serve(handler.CreateItem, http.MethodPost, "/shop/items", body)
 
@@ -333,6 +333,9 @@ func TestCreateItemAcceptsMeasurements(t *testing.T) {
 	}
 	if created.Category != "tops" {
 		t.Fatalf("category = %q, want tops", created.Category)
+	}
+	if created.Size != "Large" {
+		t.Fatalf("size = %q, want Large", created.Size)
 	}
 	if got := measurementByLabel(t, created.Measurements, "Pit to pit").ValueInches; got != 24.5 {
 		t.Fatalf("pit to pit = %v, want 24.5", got)
@@ -486,7 +489,7 @@ func TestCreateItemRejectsInvalidPayload(t *testing.T) {
 func TestUpdateItemAppliesPatch(t *testing.T) {
 	handler, _ := newTestHandler(t)
 
-	rr := serve(handler.UpdateItem, http.MethodPatch, "/shop/items/2", `{"title":"Renamed","stock":7}`, "id", "2")
+	rr := serve(handler.UpdateItem, http.MethodPatch, "/shop/items/2", `{"title":"Renamed","stock":7,"size":"Medium"}`, "id", "2")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d (%s)", http.StatusOK, rr.Code, rr.Body.String())
@@ -501,6 +504,9 @@ func TestUpdateItemAppliesPatch(t *testing.T) {
 	}
 	if updated.Stock != 7 {
 		t.Fatalf("stock = %d, want 7", updated.Stock)
+	}
+	if updated.Size != "Medium" {
+		t.Fatalf("size = %q, want Medium", updated.Size)
 	}
 	if updated.Description != "A bag of beans" {
 		t.Fatalf("expected untouched fields to survive, got description %q", updated.Description)

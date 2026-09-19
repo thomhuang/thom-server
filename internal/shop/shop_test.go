@@ -49,6 +49,9 @@ func TestModelEnsureSchemaDropsLegacyMeasurementColumns(t *testing.T) {
 	if !columns["Category"] {
 		t.Fatal("Category column is missing after EnsureSchema")
 	}
+	if !columns["Size"] {
+		t.Fatal("Size column is missing after EnsureSchema")
+	}
 }
 
 // shopItemColumns returns the column names currently on ShopItems.
@@ -305,6 +308,7 @@ func TestModelMeasurementRoundTripPreservesDecimal(t *testing.T) {
 	created, err := model.InsertItem(&Item{
 		Title:      "Clothing listing",
 		Category:   "pants",
+		Size:       "36x32",
 		PriceCents: 1800,
 		Currency:   "usd",
 		Stock:      1,
@@ -330,6 +334,9 @@ func TestModelMeasurementRoundTripPreservesDecimal(t *testing.T) {
 	}
 	if created.Category != "pants" {
 		t.Fatalf("category = %q, want pants", created.Category)
+	}
+	if created.Size != "36x32" {
+		t.Fatalf("size = %q, want 36x32", created.Size)
 	}
 
 	reloadedID, err := strconv.Atoi(created.ID)
