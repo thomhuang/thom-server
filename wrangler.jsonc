@@ -30,18 +30,18 @@
   ],
   "vars": {
     "CLIENT_ORIGIN_URLS": "https://www.thomhuang.com",
-    "SECURE_COOKIES": "true",
     "D1_ACCOUNT_ID": "d267f5667d69d024b78f3435e213c77d",
     "D1_DATABASE_ID": "d9ebb328-8e11-474f-b3c8-fe2660bd9c8c",
     "D1_ENDPOINT": "",
+    "EMAIL_ACCOUNT_ID": "d267f5667d69d024b78f3435e213c77d",
+    "EMAIL_FROM": "orders@thomhuang.com",
+    "EMAIL_FROM_NAME": "Thomas Huang",
+    "PUBLIC_SITE_URL": "https://www.thomhuang.com",
     "R2_ACCOUNT_ID": "d267f5667d69d024b78f3435e213c77d",
     "R2_BUCKET": "listing-images",
     "R2_PUBLIC_BASE_URL": "https://img.thomhuang.com",
-    "EMAIL_ACCOUNT_ID": "d267f5667d69d024b78f3435e213c77d",
-    "EMAIL_FROM": "orders@thomhuang.com",
-    "EMAIL_FROM_NAME": "Thom Huang",
-    "PUBLIC_SITE_URL": "https://www.thomhuang.com",
-    "STRIPE_TAX_ENABLED": "false",
-    "STRIPE_SHIPPING_CENTS": "1000"
+    "SECURE_COOKIES": "true",
+    "STRIPE_SHIPPING_CENTS": "1000",
+    "STRIPE_TAX_ENABLED": "true"
   }
 }
