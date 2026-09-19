@@ -361,8 +361,9 @@ func (m *Model) ListOrdersPage(limit, cursor int) ([]*Order, int, error) {
 }
 
 // MarkOrderPaid records a confirmed payment. Stripe retries webhooks
-// aggressively, so the status guard makes this idempotent: a repeated delivery
-// updates no rows and reports false.
+// aggressively, so the status guard makes this idempotent: only a pending
+// order can become paid. A redelivery of a paid, refund_pending, or refunded
+// order updates no rows and reports false, so it can never revive a refund.
 func (m *Model) MarkOrderPaid(sessionID string, details PaidDetails) (bool, error) {
 	result, err := m.DB.Exec(
 		`UPDATE ShopOrders
@@ -381,7 +382,7 @@ func (m *Model) MarkOrderPaid(sessionID string, details PaidDetails) (bool, erro
 			Currency = ?,
 			ViewTokenHash = ?,
 			UpdatedAt = datetime('now')
-		 WHERE StripeSessionID = ? AND Status <> ?`,
+		 WHERE StripeSessionID = ? AND Status = ?`,
 		OrderStatusPaid,
 		details.CustomerEmail,
 		details.CustomerName,
@@ -397,7 +398,7 @@ func (m *Model) MarkOrderPaid(sessionID string, details PaidDetails) (bool, erro
 		currencyOr(details.Currency),
 		details.ViewTokenHash,
 		sessionID,
-		OrderStatusPaid,
+		OrderStatusPending,
 	)
 	if err != nil {
 		return false, err

@@ -613,6 +613,76 @@ func TestStripeWebhookRefundsOversoldOrder(t *testing.T) {
 	}
 }
 
+func TestStripeWebhookRedeliveryDoesNotReviveRefundedOrder(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	stripeClient := &fakeStripeClient{}
+	mailer := &fakeMailer{}
+	handler.WithStripe(stripeClient, StripeSettings{WebhookSecret: testWebhookSecret}).
+		WithMailer(mailer, "https://www.example.com")
+
+	// Item 1 has stock 5 and the order sells 99, so the first delivery detects
+	// the oversell and refunds the payment.
+	if _, err := handler.shop.InsertPendingOrder("cs_test_redeliver_refund", &shopdata.Order{
+		Currency: "usd",
+		Lines:    []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 99}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := checkoutCompletedPayloadForSession(t, &stripe.CheckoutSession{
+		ID:            "cs_test_redeliver_refund",
+		AmountTotal:   1800,
+		Currency:      "usd",
+		PaymentIntent: &stripe.PaymentIntent{ID: "pi_test_redeliver_refund"},
+		CustomerDetails: &stripe.CheckoutSessionCustomerDetails{
+			Email: "buyer@example.com",
+		},
+	})
+
+	recorder := httptest.NewRecorder()
+	handler.StripeWebhook(recorder, webhookRequest(t, payload, testWebhookSecret))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("first delivery status = %d, want %d (%s)", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	// A restock after the refund makes the oversold line buyable again, so a
+	// redelivered completed event would decrement stock if it revived the order.
+	if err := handler.shop.RestoreStock("1", 200); err != nil {
+		t.Fatal(err)
+	}
+	mailer.messages = nil
+
+	recorder = httptest.NewRecorder()
+	handler.StripeWebhook(recorder, webhookRequest(t, payload, testWebhookSecret))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("second delivery status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	order, err := handler.shop.GetOrderBySessionID("cs_test_redeliver_refund")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != shopdata.OrderStatusRefunded {
+		t.Fatalf("status = %q, want refunded after redelivery", order.Status)
+	}
+
+	item, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Stock != 205 {
+		t.Fatalf("stock = %d, want 205 with no second decrement", item.Stock)
+	}
+
+	if len(mailer.messages) != 0 {
+		t.Fatalf("emails after redelivery = %d, want 0", len(mailer.messages))
+	}
+
+	if len(stripeClient.refundPaymentIntents) != 1 {
+		t.Fatalf("refunds = %v, want exactly one refund", stripeClient.refundPaymentIntents)
+	}
+}
+
 func TestStripeWebhookRefundErrorLeavesOrderRefundPending(t *testing.T) {
 	handler, _ := newTestHandler(t)
 	stripeClient := &fakeStripeClient{refundErr: errors.New("stripe unavailable")}
