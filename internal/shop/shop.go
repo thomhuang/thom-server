@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 
 	"thom-server/internal/data"
 )
@@ -336,16 +337,35 @@ func (m *Model) GetItemByID(id int) (*Item, error) {
 	item.ID = strconv.Itoa(itemID)
 	item.IsPublished = isPublished != 0
 
-	measurements, err := m.getMeasurements(itemID)
-	if err != nil {
-		return nil, err
-	}
-	item.Measurements = measurements
+	// Measurements and images are independent reads of the same row's children,
+	// so run them together instead of paying two sequential D1 round trips.
+	var (
+		measurements []*Measurement
+		images       []*Image
+		measureErr   error
+		imageErr     error
+	)
 
-	images, err := m.getImages(itemID)
-	if err != nil {
-		return nil, err
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		measurements, measureErr = m.getMeasurements(itemID)
+	}()
+	go func() {
+		defer wg.Done()
+		images, imageErr = m.getImages(itemID)
+	}()
+	wg.Wait()
+
+	if measureErr != nil {
+		return nil, measureErr
 	}
+	if imageErr != nil {
+		return nil, imageErr
+	}
+
+	item.Measurements = measurements
 	item.Images = images
 
 	return item, nil

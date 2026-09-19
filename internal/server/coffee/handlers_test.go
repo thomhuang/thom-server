@@ -29,7 +29,7 @@ func TestGetCoffeeEntries(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
 	}
 
-	var entries []coffeedata.EntrySummary
+	var entries []coffeedata.Entry
 	if err := json.Unmarshal(rr.Body.Bytes(), &entries); err != nil {
 		t.Fatal(err)
 	}

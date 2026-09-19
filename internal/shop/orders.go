@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"strconv"
 	"strings"
+	"sync"
 
 	"thom-server/internal/data"
 )
@@ -155,10 +156,23 @@ func (m *Model) GetOrderByViewToken(tokenHash string) (*Order, error) {
 }
 
 // getOrder loads one order and its lines. where is a package constant clause,
-// never caller input.
+// never caller input. The lines resolve the order id through a subquery so the
+// two reads can run together instead of as two sequential D1 round trips.
 func (m *Model) getOrder(where string, arg any) (*Order, error) {
 	order := &Order{}
 	var orderID int
+
+	var (
+		lines    []*OrderLine
+		linesErr error
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		lines, linesErr = m.getOrderLinesByOrder(where, arg)
+	}()
 
 	err := m.DB.QueryRow(
 		`SELECT `+orderColumns+`
@@ -187,14 +201,15 @@ func (m *Model) getOrder(where string, arg any) (*Order, error) {
 		&order.UpdatedAt,
 	)
 	if err != nil {
+		wg.Wait()
 		return nil, data.NoRecord(err)
 	}
 
 	order.ID = strconv.Itoa(orderID)
 
-	lines, err := m.getOrderLines(orderID)
-	if err != nil {
-		return nil, err
+	wg.Wait()
+	if linesErr != nil {
+		return nil, linesErr
 	}
 	order.Lines = lines
 
@@ -474,13 +489,16 @@ func (m *Model) DecrementStock(itemID string, quantity int) (bool, error) {
 	return rowsAffected > 0, nil
 }
 
-func (m *Model) getOrderLines(orderID int) ([]*OrderLine, error) {
+// getOrderLinesByOrder returns the lines of the order matching where/arg. where
+// is a package constant clause, never caller input. It resolves the order id
+// itself so it can run alongside the order read.
+func (m *Model) getOrderLinesByOrder(where string, arg any) ([]*OrderLine, error) {
 	rows, err := m.DB.Query(
 		`SELECT id, ItemID, Title, UnitPriceCents, Quantity
 		 FROM ShopOrderLines
-		 WHERE OrderID = ?
+		 WHERE OrderID = (SELECT id FROM ShopOrders WHERE `+where+`)
 		 ORDER BY id ASC`,
-		orderID,
+		arg,
 	)
 	if err != nil {
 		return nil, err

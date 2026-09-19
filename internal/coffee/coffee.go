@@ -37,20 +37,6 @@ type Entry struct {
 	CreatedAt        string  `json:"createdAt,omitempty"`
 }
 
-type EntrySummary struct {
-	ID               string `json:"id"`
-	Date             string `json:"date"`
-	CoffeeName       string `json:"coffeeName"`
-	Origin           string `json:"origin"`
-	CoffeeVarietal   string `json:"coffeeVarietal"`
-	ProcessingMethod string `json:"processingMethod"`
-	Roaster          string `json:"roaster"`
-	BrewMethod       string `json:"brewMethod"`
-	Ratio            string `json:"ratio"`
-	TastingNotes     string `json:"tastingNotes"`
-	Rating           int    `json:"rating"`
-}
-
 type Roaster struct {
 	ID        string `json:"id"`
 	Roaster   string `json:"roaster"`
@@ -444,10 +430,18 @@ func getGrinderByID(q querier, id string) (*Grinder, error) {
 	return grinder, nil
 }
 
-func (m *Model) GetAll() ([]*EntrySummary, error) {
-	stmt := `
-		SELECT id, BrewDate, CoffeeName, Origin, CoffeeVarietal, ProcessingMethod,
-			Roaster, BrewMethod, Ratio, Notes, Rating
+// entryColumns is the full column list every entry read scans. It is a constant
+// so the list and single-entry reads cannot drift apart.
+const entryColumns = `id, BrewDate, CoffeeName, Origin, CoffeeVarietal, ProcessingMethod,
+	DaysSinceRoast, RoasterID, Roaster, BrewMethod, Ratio, GrinderID, Grinder,
+	GrindSetting, Dose, YieldAmount, WaterTemperature, BrewTime,
+	BloomTime, BloomWater, PourNotes, RoastLevel, Notes, Rating, CreatedAt`
+
+// GetAll returns every entry in full. The list view renders the same fields as
+// the detail view, so returning summaries would only force a follow-up request
+// per entry.
+func (m *Model) GetAll() ([]*Entry, error) {
+	stmt := `SELECT ` + entryColumns + `
 		FROM CoffeeEntries
 		ORDER BY BrewDate DESC, id DESC`
 
@@ -457,27 +451,13 @@ func (m *Model) GetAll() ([]*EntrySummary, error) {
 	}
 	defer rows.Close()
 
-	entries := make([]*EntrySummary, 0)
+	entries := make([]*Entry, 0)
 	for rows.Next() {
-		entry := &EntrySummary{}
-		var id int
-		if err = rows.Scan(
-			&id,
-			&entry.Date,
-			&entry.CoffeeName,
-			&entry.Origin,
-			&entry.CoffeeVarietal,
-			&entry.ProcessingMethod,
-			&entry.Roaster,
-			&entry.BrewMethod,
-			&entry.Ratio,
-			&entry.TastingNotes,
-			&entry.Rating,
-		); err != nil {
+		entry, err := scanCoffeeEntry(rows)
+		if err != nil {
 			return nil, err
 		}
 
-		entry.ID = strconv.Itoa(id)
 		entries = append(entries, entry)
 	}
 
@@ -489,11 +469,7 @@ func (m *Model) GetAll() ([]*EntrySummary, error) {
 }
 
 func (m *Model) GetByID(id int) (*Entry, error) {
-	stmt := `
-		SELECT id, BrewDate, CoffeeName, Origin, CoffeeVarietal, ProcessingMethod,
-			DaysSinceRoast, RoasterID, Roaster, BrewMethod, Ratio, GrinderID, Grinder,
-			GrindSetting, Dose, YieldAmount, WaterTemperature, BrewTime,
-			BloomTime, BloomWater, PourNotes, RoastLevel, Notes, Rating, CreatedAt
+	stmt := `SELECT ` + entryColumns + `
 		FROM CoffeeEntries
 		WHERE id = ?`
 
