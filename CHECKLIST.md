@@ -16,8 +16,9 @@ dated note when something changes.
 - [x] Delete `SERVER_HANDOFF.md` — items A (worker email var forwarding) and B
       (cache headers, D1 round-trip collapse) are implemented and committed.
       (2026-09-19: deleted from disk; never committed.)
-- [ ] Refresh `~/Repos/STATUS.md` — it still says `thom-server` main is
+- [x] Refresh `~/Repos/STATUS.md` — it still says `thom-server` main is
       `c93ab1a` and clean; it is `2e092ff` with pending changes.
+      (2026-09-19: refreshed to `b0bb547` / `d208795`, both pushed.)
 
 ## Cloudflare / Stripe / email
 
@@ -28,10 +29,8 @@ dated note when something changes.
       `cf-bounce`, bounce MX, DMARC reject; the dashboard "subdomain already
       exists" error was the onboarding flow refusing an already-onboarded
       domain.)
-- [ ] Set `ORDER_NOTIFICATION_EMAIL` on production `thom-server`
-      (2026-09-19: `EMAIL_API_TOKEN` is set on both Workers and
-      `ORDER_NOTIFICATION_EMAIL` on the test Worker; only the production
-      operator-notification secret is missing).
+- [x] Set `ORDER_NOTIFICATION_EMAIL` on production `thom-server`
+      (2026-09-19: set by the operator.)
 - [ ] Verify the remaining secrets on both Workers: `ADMIN_USERNAME`,
       `ADMIN_PASSWORD_HASH`, `JWT_SECRET`, `CF_API_TOKEN`, `R2_ACCESS_KEY_ID`,
       `R2_SECRET_ACCESS_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
@@ -50,19 +49,17 @@ dated note when something changes.
 
 ## Website repo (thom-website)
 
-- [ ] Promote `origin/main` → `origin/release` when the shop is ready
-      (`release` was 1 commit behind `main` as of 2026-09-19).
+- [x] Promote `origin/main` → `origin/release` when the shop is ready
+      (2026-09-19: fast-forwarded `535b89f..d208795`; local `release` branch
+      updated too.)
 
-## Agreed but not started
+## Stock reservation
 
-- [ ] Stock reservation at checkout (agreed 2026-09-19): reserve stock when the
+- [x] Stock reservation at checkout (agreed 2026-09-19): reserve stock when the
       Checkout Session is created (conditional decrement, loser gets 409),
       30-minute hold via `ExpiresAt`, release on `checkout.session.expired`,
       `StockReserved` column so pre-existing pending orders keep the legacy
-      decrement-at-webhook path. (2026-09-19: implemented and tested in
-      `internal/shop`/`internal/server/shop` — checkout reserves stock with a
-      30-minute session expiry, `checkout.session.expired` and a lazy sweep
-      release it, and insert failure restores stock and expires the session.
-      The thom-website admin-UI change for the `expired` status is also done
-      (uncommitted in both repos). Remaining: deploy both repos, add
-      `checkout.session.expired` to the **live** Stripe webhook endpoints.)
+      decrement-at-webhook path. (2026-09-19: committed in thom-server
+      `2073951` and thom-website `55795f8`, both pushed. Remaining operator
+      steps: deploy both repos, confirm the live webhook signing secret
+      matches `STRIPE_WEBHOOK_SECRET` — see the webhook item above.)
