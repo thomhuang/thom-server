@@ -2,7 +2,6 @@ package shop
 
 import (
 	"database/sql"
-	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -504,7 +503,9 @@ func (m *Model) AddImage(itemID int, image *Image) (*Image, error) {
 		return nil, err
 	}
 
-	return m.getImageByID(int(id))
+	image.ID = strconv.FormatInt(id, 10)
+
+	return image, nil
 }
 
 // DeleteImage detaches an image from a listing and returns it so the caller can
@@ -548,6 +549,36 @@ func (m *Model) CountImages(itemID int) (int, error) {
 	return count, nil
 }
 
+// ItemImageCount reports whether an item exists and how many images it has, in
+// a single round trip.
+func (m *Model) ItemImageCount(itemID int) (bool, int, error) {
+	var exists, count int
+	err := m.DB.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM ShopItems WHERE id = ?),
+			(SELECT COUNT(*) FROM ShopItemImages WHERE ItemID = ?)`,
+		itemID,
+		itemID,
+	).Scan(&exists, &count)
+	if err != nil {
+		return false, 0, err
+	}
+
+	return exists != 0, count, nil
+}
+
+// ItemExists reports whether a listing exists.
+func (m *Model) ItemExists(id int) (bool, error) {
+	var exists int
+	err := m.DB.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM ShopItems WHERE id = ?)`, id,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+
+	return exists != 0, nil
+}
+
 func (m *Model) getImages(itemID int) ([]*Image, error) {
 	stmt := `
 		SELECT id, ObjectKey, AltText, SortOrder
@@ -579,29 +610,6 @@ func (m *Model) getImages(itemID int) ([]*Image, error) {
 	}
 
 	return images, nil
-}
-
-func (m *Model) getImageByID(id int) (*Image, error) {
-	stmt := `
-		SELECT id, ObjectKey, AltText, SortOrder
-		FROM ShopItemImages
-		WHERE id = ?`
-
-	image := &Image{}
-	var imageID int
-
-	err := m.DB.QueryRow(stmt, id).Scan(
-		&imageID,
-		&image.ObjectKey,
-		&image.AltText,
-		&image.SortOrder,
-	)
-	if err != nil {
-		return nil, data.NoRecord(err)
-	}
-	image.ID = strconv.Itoa(imageID)
-
-	return image, nil
 }
 
 // getMeasurements returns a listing's measurements in the order they were saved.
@@ -647,18 +655,23 @@ func (m *Model) replaceMeasurements(itemID int, measurements []*Measurement) err
 		return err
 	}
 
-	for _, measurement := range measurements {
-		if _, err := m.DB.Exec(
-			`INSERT INTO ShopItemMeasurements (ItemID, Label, ValueInches) VALUES (?, ?, ?)`,
-			itemID,
-			measurement.Label,
-			measurement.ValueInches,
-		); err != nil {
-			return err
-		}
+	if len(measurements) == 0 {
+		return nil
 	}
 
-	return nil
+	placeholders := make([]string, 0, len(measurements))
+	args := make([]any, 0, len(measurements)*3)
+	for _, measurement := range measurements {
+		placeholders = append(placeholders, "(?, ?, ?)")
+		args = append(args, itemID, measurement.Label, measurement.ValueInches)
+	}
+
+	stmt := `INSERT INTO ShopItemMeasurements (ItemID, Label, ValueInches) VALUES ` +
+		strings.Join(placeholders, ", ")
+
+	_, err := m.DB.Exec(stmt, args...)
+
+	return err
 }
 
 func (m *Model) GetBrands() ([]*Brand, error) {
@@ -701,35 +714,31 @@ func (m *Model) upsertBrand(brand *Brand) (*Brand, error) {
 		return &Brand{}, nil
 	}
 
-	existingBrand, err := getBrandByName(m.DB, brand.Brand)
-	if err == nil {
-		return existingBrand, nil
-	}
-	if !errors.Is(err, data.ErrNoRecord) {
-		return nil, err
-	}
-
 	if brand.ID == "" {
 		brand.ID = SlugifyName(brand.Brand)
 	}
 
-	existingBrand, err = getBrandByID(m.DB, brand.ID)
-	if err == nil {
-		return existingBrand, nil
-	}
-	if !errors.Is(err, data.ErrNoRecord) {
-		return nil, err
-	}
-
+	// One statement covers all three cases: an existing case-insensitive name
+	// match, an id that collides with a differently named row, and a fresh
+	// insert. The no-op SET keeps the stored name, so a colliding id never
+	// overwrites the existing row.
 	stmt := `
 		INSERT INTO ShopBrands (id, Brand)
-		VALUES (?, ?)`
+		VALUES (?, ?)
+		ON CONFLICT DO UPDATE SET Brand = Brand
+		RETURNING id, Brand, CreatedAt`
 
-	if _, err = m.DB.Exec(stmt, brand.ID, brand.Brand); err != nil {
-		return nil, err
+	createdBrand := &Brand{}
+	err := m.DB.QueryRow(stmt, brand.ID, brand.Brand).Scan(
+		&createdBrand.ID,
+		&createdBrand.Brand,
+		&createdBrand.CreatedAt,
+	)
+	if err != nil {
+		return nil, data.NoRecord(err)
 	}
 
-	return getBrandByID(m.DB, brand.ID)
+	return createdBrand, nil
 }
 
 func (m *Model) GetBrandByName(name string) (*Brand, error) {

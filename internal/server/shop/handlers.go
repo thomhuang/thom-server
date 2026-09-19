@@ -324,13 +324,13 @@ func (h *Handler) PresignImageUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.shop.GetItemByID(id); h.responder.HandleDataError(w, err) {
-		return
-	}
-
-	imageCount, err := h.shop.CountImages(id)
+	exists, imageCount, err := h.shop.ItemImageCount(id)
 	if err != nil {
 		h.responder.ServerError(w, err)
+		return
+	}
+	if !exists {
+		h.responder.NotFound(w)
 		return
 	}
 	if imageCount >= shopdata.MaxItemImages {
@@ -380,7 +380,13 @@ func (h *Handler) CreateImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.shop.GetItemByID(id); h.responder.HandleDataError(w, err) {
+	exists, err := h.shop.ItemExists(id)
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+	if !exists {
+		h.responder.NotFound(w)
 		return
 	}
 

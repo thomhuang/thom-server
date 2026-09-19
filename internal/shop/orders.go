@@ -125,7 +125,7 @@ func (m *Model) InsertPendingOrder(sessionID string, order *Order) (*Order, erro
 	}
 
 	for _, line := range order.Lines {
-		if _, err = m.DB.Exec(
+		lineResult, err := m.DB.Exec(
 			`INSERT INTO ShopOrderLines (OrderID, ItemID, Title, UnitPriceCents, Quantity)
 			 VALUES (?, ?, ?, ?, ?)`,
 			orderID,
@@ -133,12 +133,24 @@ func (m *Model) InsertPendingOrder(sessionID string, order *Order) (*Order, erro
 			line.Title,
 			line.UnitPriceCents,
 			line.Quantity,
-		); err != nil {
+		)
+		if err != nil {
 			return nil, err
 		}
+
+		lineID, err := lineResult.LastInsertId()
+		if err != nil {
+			return nil, err
+		}
+		line.ID = strconv.FormatInt(lineID, 10)
 	}
 
-	return m.GetOrderBySessionID(sessionID)
+	order.ID = strconv.FormatInt(orderID, 10)
+	order.StripeSessionID = sessionID
+	order.Status = OrderStatusPending
+	order.Currency = currencyOr(order.Currency)
+
+	return order, nil
 }
 
 // GetOrderBySessionID looks an order up by its unguessable Stripe session id.
