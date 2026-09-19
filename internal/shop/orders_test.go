@@ -3,6 +3,7 @@ package shop
 import (
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestInsertPendingOrderSnapshotsLines(t *testing.T) {
@@ -396,5 +397,177 @@ func TestRestoreStock(t *testing.T) {
 	}
 	if reloaded.Stock != 5 {
 		t.Fatalf("stock = %d, want 5 after a zero restore", reloaded.Stock)
+	}
+}
+
+func TestInsertPendingOrderPersistsReservation(t *testing.T) {
+	model := newTestModel(t)
+
+	expiresAt := time.Now().Add(time.Hour).Unix()
+	order, err := model.InsertPendingOrder("cs_reserved", &Order{
+		Currency:      "usd",
+		StockReserved: 1,
+		ExpiresAt:     expiresAt,
+		Lines:         []*OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != OrderStatusPending {
+		t.Fatalf("status = %q, want %q", order.Status, OrderStatusPending)
+	}
+
+	loaded, err := model.GetOrderBySessionID("cs_reserved")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.StockReserved != 1 {
+		t.Fatalf("stockReserved = %d, want 1", loaded.StockReserved)
+	}
+	if loaded.ExpiresAt != expiresAt {
+		t.Fatalf("expiresAt = %d, want %d", loaded.ExpiresAt, expiresAt)
+	}
+
+	legacy, err := model.InsertPendingOrder("cs_legacy_reservation", &Order{
+		Currency: "usd",
+		Lines:    []*OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.StockReserved != 0 || legacy.ExpiresAt != 0 {
+		t.Fatalf("legacy order = %d/%d, want the zero defaults", legacy.StockReserved, legacy.ExpiresAt)
+	}
+}
+
+func TestMarkOrderExpiredOnlyForPendingOrders(t *testing.T) {
+	model := newTestModel(t)
+
+	if _, err := model.InsertPendingOrder("cs_expire", &Order{Currency: "usd"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.InsertPendingOrder("cs_paid", &Order{Currency: "usd"}); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := model.MarkOrderExpired("cs_expire")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("first MarkOrderExpired should update the row")
+	}
+
+	changed, err = model.MarkOrderExpired("cs_expire")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("a repeated expiry should be a no-op")
+	}
+
+	if _, err = model.MarkOrderPaid("cs_paid", PaidDetails{Currency: "usd"}); err != nil {
+		t.Fatal(err)
+	}
+	changed, err = model.MarkOrderExpired("cs_paid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("a paid order must not expire")
+	}
+
+	paid, err := model.GetOrderBySessionID("cs_paid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paid.Status != OrderStatusPaid {
+		t.Fatalf("status = %q, want %q", paid.Status, OrderStatusPaid)
+	}
+}
+
+func TestReleaseExpiredReservationsRestoresStockOnce(t *testing.T) {
+	model := newTestModel(t)
+	now := time.Now().Unix()
+
+	item, err := model.InsertItem(&Item{Title: "Held item", PriceCents: 1000, Currency: "usd", Stock: 5, IsPublished: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if ok, err := model.DecrementStock(item.ID, 2); err != nil || !ok {
+		t.Fatalf("setup decrement failed: %v", err)
+	}
+	if _, err := model.InsertPendingOrder("cs_stale", &Order{
+		Currency:      "usd",
+		StockReserved: 1,
+		ExpiresAt:     now - 60,
+		Lines:         []*OrderLine{{ItemID: item.ID, Title: item.Title, UnitPriceCents: item.PriceCents, Quantity: 2}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if ok, err := model.DecrementStock(item.ID, 1); err != nil || !ok {
+		t.Fatalf("setup decrement failed: %v", err)
+	}
+	if _, err := model.InsertPendingOrder("cs_fresh", &Order{
+		Currency:      "usd",
+		StockReserved: 1,
+		ExpiresAt:     now + 3600,
+		Lines:         []*OrderLine{{ItemID: item.ID, Title: item.Title, UnitPriceCents: item.PriceCents, Quantity: 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A paid order whose hold window has passed must not be released.
+	if ok, err := model.DecrementStock(item.ID, 1); err != nil || !ok {
+		t.Fatalf("setup decrement failed: %v", err)
+	}
+	if _, err := model.InsertPendingOrder("cs_paid_stale", &Order{
+		Currency:      "usd",
+		StockReserved: 1,
+		ExpiresAt:     now - 60,
+		Lines:         []*OrderLine{{ItemID: item.ID, Title: item.Title, UnitPriceCents: item.PriceCents, Quantity: 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.MarkOrderPaid("cs_paid_stale", PaidDetails{Currency: "usd"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := model.ReleaseExpiredReservations(now); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.ReleaseExpiredReservations(now); err != nil {
+		t.Fatal(err)
+	}
+
+	stale, err := model.GetOrderBySessionID("cs_stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.Status != OrderStatusExpired {
+		t.Fatalf("stale hold status = %q, want expired", stale.Status)
+	}
+
+	fresh, err := model.GetOrderBySessionID("cs_fresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Status != OrderStatusPending {
+		t.Fatalf("fresh hold status = %q, want pending", fresh.Status)
+	}
+
+	itemID, err := strconv.Atoi(item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := model.GetItemByID(itemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 5 - 2 (stale, restored) - 1 (fresh) - 1 (paid) = 3.
+	if reloaded.Stock != 3 {
+		t.Fatalf("stock = %d, want 3 after releasing the stale hold once", reloaded.Stock)
 	}
 }

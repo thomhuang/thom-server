@@ -22,6 +22,8 @@ const (
 	OrderStatusRefundPending = "refund_pending"
 	// OrderStatusRefunded is set once Stripe confirms the refund.
 	OrderStatusRefunded = "refunded"
+	// OrderStatusExpired is set when a Checkout Session expires before payment.
+	OrderStatusExpired = "expired"
 )
 
 // OrderLine snapshots a listing's title and price at purchase time, so editing
@@ -34,7 +36,10 @@ type OrderLine struct {
 	Quantity       int    `json:"quantity"`
 }
 
-// Order is a Stripe Checkout purchase.
+// Order is a Stripe Checkout purchase. StockReserved marks an order whose
+// stock was decremented when the session was created, and ExpiresAt is the
+// unix timestamp its reservation hold ends; both are internal state and stay
+// out of the API.
 type Order struct {
 	ID               string       `json:"id"`
 	StripeSessionID  string       `json:"stripeSessionId"`
@@ -56,6 +61,8 @@ type Order struct {
 	RefundReason     string       `json:"refundReason"`
 	CreatedAt        string       `json:"createdAt"`
 	UpdatedAt        string       `json:"updatedAt"`
+	StockReserved    int          `json:"-"`
+	ExpiresAt        int64        `json:"-"`
 }
 
 // PaidDetails carries the customer and total information Stripe reports once a
@@ -103,17 +110,23 @@ func HashOrderViewToken(token string) string {
 // constant so the session and view-token lookups cannot drift apart.
 const orderColumns = `id, StripeSessionID, Status, CustomerEmail, CustomerName, ShippingAddress,
 	ShipName, ShipLine1, ShipLine2, ShipCity, ShipState, ShipPostalCode, ShipCountry,
-	AmountTotalCents, Currency, RefundedAt, RefundReason, CreatedAt, UpdatedAt`
+	AmountTotalCents, Currency, RefundedAt, RefundReason, CreatedAt, UpdatedAt,
+	StockReserved, ExpiresAt`
 
 // InsertPendingOrder records a Checkout Session and the lines the customer is
 // paying for. D1 has no interactive transactions, so the order row and its
-// lines are written as separate statements.
+// lines are written as separate statements. A non-zero StockReserved with an
+// ExpiresAt persists a checkout-time stock reservation; the zero values keep
+// the legacy decrement-at-webhook behavior for pre-reservation orders.
 func (m *Model) InsertPendingOrder(sessionID string, order *Order) (*Order, error) {
 	result, err := m.DB.Exec(
-		`INSERT INTO ShopOrders (StripeSessionID, Status, Currency) VALUES (?, ?, ?)`,
+		`INSERT INTO ShopOrders (StripeSessionID, Status, Currency, StockReserved, ExpiresAt)
+		 VALUES (?, ?, ?, ?, ?)`,
 		sessionID,
 		OrderStatusPending,
 		currencyOr(order.Currency),
+		order.StockReserved,
+		order.ExpiresAt,
 	)
 	if err != nil {
 		return nil, err
@@ -211,6 +224,8 @@ func (m *Model) getOrder(where string, arg any) (*Order, error) {
 		&order.RefundReason,
 		&order.CreatedAt,
 		&order.UpdatedAt,
+		&order.StockReserved,
+		&order.ExpiresAt,
 	)
 	if err != nil {
 		wg.Wait()
@@ -273,6 +288,8 @@ func (m *Model) ListOrdersPage(limit, cursor int) ([]*Order, int, error) {
 			&order.RefundReason,
 			&order.CreatedAt,
 			&order.UpdatedAt,
+			&order.StockReserved,
+			&order.ExpiresAt,
 		); err != nil {
 			rows.Close()
 			return nil, 0, err
@@ -458,6 +475,89 @@ func (m *Model) MarkOrderRefunded(sessionID string) (bool, error) {
 	}
 
 	return rowsAffected > 0, nil
+}
+
+// MarkOrderExpired records an expired Checkout Session. Only a pending order
+// can expire, so a redelivered event or a race with payment updates nothing
+// and reports false.
+func (m *Model) MarkOrderExpired(sessionID string) (bool, error) {
+	result, err := m.DB.Exec(
+		`UPDATE ShopOrders
+		 SET Status = ?, UpdatedAt = datetime('now')
+		 WHERE StripeSessionID = ? AND Status = ?`,
+		OrderStatusExpired,
+		sessionID,
+		OrderStatusPending,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return rowsAffected > 0, nil
+}
+
+// ReleaseExpiredReservations restores the stock held by reservations whose
+// hold window has passed and marks their orders expired. It is the lazy sweep
+// behind the checkout.session.expired webhook, so a missed webhook delivery
+// can never strand stock. Each order is marked before its stock is restored:
+// whoever wins that status transition owns the stock, so a concurrent payment
+// or webhook can never restore and decrement the same reservation twice.
+func (m *Model) ReleaseExpiredReservations(now int64) error {
+	rows, err := m.DB.Query(
+		`SELECT StripeSessionID
+		 FROM ShopOrders
+		 WHERE Status = ? AND StockReserved = 1 AND ExpiresAt > 0 AND ExpiresAt <= ?`,
+		OrderStatusPending,
+		now,
+	)
+	if err != nil {
+		return err
+	}
+
+	var sessionIDs []string
+	for rows.Next() {
+		var sessionID string
+		if err = rows.Scan(&sessionID); err != nil {
+			rows.Close()
+			return err
+		}
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+
+	for _, sessionID := range sessionIDs {
+		order, err := m.getOrder("StripeSessionID = ?", sessionID)
+		if err != nil {
+			return err
+		}
+
+		changed, err := m.MarkOrderExpired(sessionID)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			continue
+		}
+
+		for _, line := range order.Lines {
+			if err = m.RestoreStock(line.ItemID, line.Quantity); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 // RestoreStock puts a refunded or cancelled line's quantity back on a listing.

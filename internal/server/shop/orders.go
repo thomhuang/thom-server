@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/stripe/stripe-go/v86"
 	"github.com/stripe/stripe-go/v86/webhook"
@@ -22,8 +23,21 @@ import (
 // maxWebhookBody bounds how much of a webhook body is read before verifying it.
 const maxWebhookBody = 1 << 20
 
-// checkoutEventType is the only Stripe event this server acts on.
-const checkoutEventType = "checkout.session.completed"
+// The two Stripe events this server acts on. Other types are acknowledged and
+// ignored.
+const (
+	checkoutEventType        = "checkout.session.completed"
+	checkoutExpiredEventType = "checkout.session.expired"
+)
+
+// reservationHold is how long a checkout keeps its stock reservation before an
+// abandoned session releases it.
+const reservationHold = 30 * time.Minute
+
+// reservationExpiryBuffer pads the Stripe session expiry past the hold so the
+// expires_at value is never below Stripe's 30-minute minimum once clock skew
+// and request latency are applied.
+const reservationExpiryBuffer = 2 * time.Minute
 
 // ErrStripeNotConfigured is returned when checkout is requested without an API key.
 var ErrStripeNotConfigured = errors.New("shop: stripe is not configured")
@@ -33,6 +47,7 @@ var ErrStripeNotConfigured = errors.New("shop: stripe is not configured")
 type StripeClient interface {
 	CreateCheckoutSession(ctx context.Context, params CheckoutParams) (*CheckoutSession, error)
 	RefundPayment(ctx context.Context, paymentIntentID string, idempotencyKey string) error
+	ExpireCheckoutSession(ctx context.Context, sessionID string) error
 }
 
 // StripeSettings is separate from Config so the handler does not depend on the
@@ -56,6 +71,7 @@ type CheckoutParams struct {
 	CancelURL      string
 	ShippingCents  int
 	TaxEnabled     bool
+	ExpiresAt      int64
 }
 
 // CheckoutSession is the part of a Stripe session the server needs to keep.
@@ -100,8 +116,9 @@ func (h *Handler) WithOrderNotifications(email string) *Handler {
 	return h
 }
 
-// Checkout creates a Checkout Session for one listing and records a pending
-// order. The price is read from the database, never from the request.
+// Checkout creates a Checkout Session for one listing and reserves its stock
+// for the hold window, so two buyers cannot pay for the same last item. The
+// price is read from the database, never from the request.
 func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 	if h.stripe == nil {
 		h.infoLog.Printf("checkout requested but Stripe is not configured")
@@ -131,6 +148,12 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Expired holds are freed lazily here so abandoned reservations never
+	// strand stock even when the expired webhook is missed.
+	if err := h.shop.ReleaseExpiredReservations(time.Now().Unix()); err != nil {
+		h.infoLog.Printf("failed to release expired reservations: %v", err)
+	}
+
 	item, err := h.shop.GetItemByID(itemID)
 	if h.responder.HandleDataError(w, err) {
 		return
@@ -139,11 +162,20 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		h.responder.NotFound(w)
 		return
 	}
-	if item.Stock < quantity {
+
+	ok, err := h.shop.DecrementStock(item.ID, quantity)
+	if err != nil {
+		h.infoLog.Printf("failed to reserve stock for item %s: %v", item.ID, err)
+		h.responder.ServerError(w, err)
+		return
+	}
+	if !ok {
 		h.infoLog.Printf("checkout for item %d exceeds available stock", itemID)
 		h.responder.ClientError(w, http.StatusConflict)
 		return
 	}
+
+	expiresAt := time.Now().Add(reservationHold + reservationExpiryBuffer)
 
 	session, err := h.stripe.CreateCheckoutSession(r.Context(), CheckoutParams{
 		ItemID:         item.ID,
@@ -155,15 +187,19 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		CancelURL:      h.stripeSettings.CancelURL,
 		ShippingCents:  h.stripeSettings.ShippingCents,
 		TaxEnabled:     h.stripeSettings.TaxEnabled,
+		ExpiresAt:      expiresAt.Unix(),
 	})
 	if err != nil {
 		h.infoLog.Printf("failed to create checkout session: %v", err)
+		h.restoreReservation(item.ID, quantity)
 		h.responder.ServerError(w, err)
 		return
 	}
 
 	order, err := h.shop.InsertPendingOrder(session.ID, &shopdata.Order{
-		Currency: item.Currency,
+		Currency:      item.Currency,
+		StockReserved: 1,
+		ExpiresAt:     expiresAt.Unix(),
 		Lines: []*shopdata.OrderLine{{
 			ItemID:         item.ID,
 			Title:          item.Title,
@@ -172,6 +208,13 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		}},
 	})
 	if err != nil {
+		// The stock is restored and the session expired so a checkout that
+		// could not be recorded can never be paid without the reservation.
+		h.infoLog.Printf("failed to record order for session %s: %v", session.ID, err)
+		h.restoreReservation(item.ID, quantity)
+		if expireErr := h.stripe.ExpireCheckoutSession(r.Context(), session.ID); expireErr != nil {
+			h.infoLog.Printf("failed to expire session %s: %v", session.ID, expireErr)
+		}
 		h.responder.ServerError(w, err)
 		return
 	}
@@ -341,7 +384,7 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if event.Type != checkoutEventType {
+	if event.Type != checkoutEventType && event.Type != checkoutExpiredEventType {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -350,6 +393,12 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 	if err = json.Unmarshal(event.Data.Raw, &session); err != nil {
 		h.infoLog.Printf("failed to decode checkout session from webhook: %v", err)
 		h.responder.BadRequest(w)
+		return
+	}
+
+	if event.Type == checkoutExpiredEventType {
+		h.expireReservedOrder(session.ID)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
@@ -404,7 +453,12 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	oversold := h.decrementOrderStock(order)
+	oversold := false
+	if order.StockReserved == 1 {
+		// The stock was already decremented when the session was created.
+	} else {
+		oversold = h.decrementOrderStock(order)
+	}
 	if oversold {
 		if _, err = h.shop.MarkOrderRefundPending(session.ID, "oversold"); err != nil {
 			h.infoLog.Printf("failed to mark order %s refund pending: %v", session.ID, err)
@@ -606,6 +660,41 @@ func (h *Handler) restoreStock(order *shopdata.Order, applied []*shopdata.OrderL
 	}
 }
 
+// expireReservedOrder releases the stock an abandoned Checkout Session held and
+// marks its order expired. The status guard on MarkOrderExpired makes this
+// idempotent, so a redelivered event or a race with the lazy sweep restores
+// stock exactly once.
+func (h *Handler) expireReservedOrder(sessionID string) {
+	order, err := h.shop.GetOrderBySessionID(sessionID)
+	if err != nil {
+		h.infoLog.Printf("expired session %s has no matching order: %v", sessionID, err)
+		return
+	}
+
+	changed, err := h.shop.MarkOrderExpired(sessionID)
+	if err != nil {
+		h.infoLog.Printf("failed to mark order %s expired: %v", sessionID, err)
+		return
+	}
+	if !changed {
+		h.infoLog.Printf("STRIPE_WEBHOOK duplicate expired session=%s", sessionID)
+		return
+	}
+
+	h.infoLog.Printf("STRIPE_WEBHOOK expired session=%s", sessionID)
+
+	if order.StockReserved == 1 {
+		h.restoreStock(order, order.Lines)
+	}
+}
+
+// restoreReservation best-effort restores the stock a failed checkout reserved.
+func (h *Handler) restoreReservation(itemID string, quantity int) {
+	if err := h.shop.RestoreStock(itemID, quantity); err != nil {
+		h.infoLog.Printf("failed to restore stock for item %s: %v", itemID, err)
+	}
+}
+
 // refundOversoldOrder refunds a paid order that could not be fulfilled. With no
 // Stripe client or payment intent it leaves the order refund_pending for an
 // operator to handle manually.
@@ -727,6 +816,9 @@ func (c *stripeClient) CreateCheckoutSession(ctx context.Context, params Checkou
 			Enabled: stripe.Bool(true),
 		}
 	}
+	if params.ExpiresAt > 0 {
+		sessionParams.ExpiresAt = stripe.Int64(params.ExpiresAt)
+	}
 
 	session, err := c.client.V1CheckoutSessions.Create(ctx, sessionParams)
 	if err != nil {
@@ -734,6 +826,18 @@ func (c *stripeClient) CreateCheckoutSession(ctx context.Context, params Checkou
 	}
 
 	return &CheckoutSession{ID: session.ID, URL: session.URL}, nil
+}
+
+// ExpireCheckoutSession kills a Checkout Session that must not be paid, for
+// example one whose order could not be recorded after its stock was reserved.
+func (c *stripeClient) ExpireCheckoutSession(ctx context.Context, sessionID string) error {
+	if c.client == nil {
+		return ErrStripeNotConfigured
+	}
+
+	_, err := c.client.V1CheckoutSessions.Expire(ctx, sessionID, nil)
+
+	return err
 }
 
 // RefundPayment refunds the payment behind a Checkout Session. Checkout

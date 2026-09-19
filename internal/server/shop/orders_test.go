@@ -44,6 +44,9 @@ type fakeStripeClient struct {
 	refundErr             error
 	refundPaymentIntents  []string
 	refundIdempotencyKeys []string
+
+	expireErr       error
+	expiredSessions []string
 }
 
 func (f *fakeStripeClient) CreateCheckoutSession(_ context.Context, params CheckoutParams) (*CheckoutSession, error) {
@@ -64,6 +67,12 @@ func (f *fakeStripeClient) RefundPayment(_ context.Context, paymentIntentID stri
 	f.refundIdempotencyKeys = append(f.refundIdempotencyKeys, idempotencyKey)
 
 	return f.refundErr
+}
+
+func (f *fakeStripeClient) ExpireCheckoutSession(_ context.Context, sessionID string) error {
+	f.expiredSessions = append(f.expiredSessions, sessionID)
+
+	return f.expireErr
 }
 
 func TestCheckoutUsesDatabasePriceAndRecordsPendingOrder(t *testing.T) {
@@ -137,6 +146,158 @@ func TestCheckoutRejectsNonPositiveQuantity(t *testing.T) {
 	rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":0}`)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCheckoutReservesStockAndSetsSessionExpiry(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	stripeClient := &fakeStripeClient{}
+	handler.WithStripe(stripeClient, StripeSettings{})
+
+	before := time.Now().Unix()
+
+	rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":2}`)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (%s)", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+
+	// Stock is reserved immediately, not when the payment webhook arrives.
+	item, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Stock != 3 {
+		t.Fatalf("stock = %d, want 3 after reserving 2 of 5", item.Stock)
+	}
+
+	order, err := handler.shop.GetOrderBySessionID("cs_test_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.StockReserved != 1 {
+		t.Fatalf("stockReserved = %d, want 1", order.StockReserved)
+	}
+	if order.ExpiresAt < before+int64(reservationHold/time.Second) ||
+		order.ExpiresAt > before+int64((reservationHold+reservationExpiryBuffer+2*time.Minute)/time.Second) {
+		t.Fatalf("expiresAt = %d, want roughly now+hold", order.ExpiresAt)
+	}
+	if stripeClient.lastParams.ExpiresAt != order.ExpiresAt {
+		t.Fatalf("session expiresAt = %d, want the stored hold %d", stripeClient.lastParams.ExpiresAt, order.ExpiresAt)
+	}
+}
+
+func TestCheckoutConflictWhenReservationExhaustsStock(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	stripeClient := &fakeStripeClient{}
+	handler.WithStripe(stripeClient, StripeSettings{})
+
+	// Item 1 has a stock of 5; the first checkout takes all of it.
+	rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":5}`)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (%s)", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+
+	rr = serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":1}`)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusConflict)
+	}
+
+	item, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Stock != 0 {
+		t.Fatalf("stock = %d, want 0 with the reservation held", item.Stock)
+	}
+	if _, err := handler.shop.GetOrderBySessionID("cs_test_123"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckoutRestoresStockWhenSessionCreationFails(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	handler.WithStripe(&fakeStripeClient{err: errors.New("stripe unavailable")}, StripeSettings{})
+
+	rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":2}`)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusInternalServerError)
+	}
+
+	item, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Stock != 5 {
+		t.Fatalf("stock = %d, want 5 restored after the failed session", item.Stock)
+	}
+}
+
+func TestCheckoutRestoresStockAndExpiresSessionWhenOrderInsertFails(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	stripeClient := &fakeStripeClient{session: &CheckoutSession{ID: "cs_dup", URL: "https://checkout.stripe.com/c/pay/cs_dup"}}
+	handler.WithStripe(stripeClient, StripeSettings{})
+
+	// The first checkout records the session id; the second one reuses it, so
+	// its order insert hits the unique StripeSessionID constraint.
+	rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":2}`)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("first status = %d, want %d (%s)", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+
+	rr = serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":2}`)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("second status = %d, want %d", rr.Code, http.StatusInternalServerError)
+	}
+
+	item, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Stock != 3 {
+		t.Fatalf("stock = %d, want 3 with the failed reservation restored", item.Stock)
+	}
+
+	if len(stripeClient.expiredSessions) != 1 || stripeClient.expiredSessions[0] != "cs_dup" {
+		t.Fatalf("expired sessions = %v, want [cs_dup]", stripeClient.expiredSessions)
+	}
+}
+
+func TestCheckoutReleasesExpiredReservationsFirst(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	handler.WithStripe(&fakeStripeClient{}, StripeSettings{})
+
+	// A stale hold takes the last item and has passed its window.
+	if ok, err := handler.shop.DecrementStock("1", 1); err != nil || !ok {
+		t.Fatalf("setup decrement failed: %v", err)
+	}
+	if _, err := handler.shop.InsertPendingOrder("cs_hold", &shopdata.Order{
+		Currency:      "usd",
+		StockReserved: 1,
+		ExpiresAt:     time.Now().Add(-time.Minute).Unix(),
+		Lines:         []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":5}`)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (%s)", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+
+	item, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Stock != 0 {
+		t.Fatalf("stock = %d, want 0 after the freed hold was re-reserved", item.Stock)
+	}
+
+	held, err := handler.shop.GetOrderBySessionID("cs_hold")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.Status != shopdata.OrderStatusExpired {
+		t.Fatalf("stale hold status = %q, want expired", held.Status)
 	}
 }
 
@@ -516,6 +677,217 @@ func TestStripeWebhookMarksPaidAndDecrementsStock(t *testing.T) {
 	}
 }
 
+func TestStripeWebhookExpiredReleasesReservedStock(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	mailer := &fakeMailer{}
+	handler.WithStripe(&fakeStripeClient{}, StripeSettings{WebhookSecret: testWebhookSecret}).
+		WithMailer(mailer, "https://www.example.com")
+
+	if ok, err := handler.shop.DecrementStock("1", 2); err != nil || !ok {
+		t.Fatalf("setup decrement failed: %v", err)
+	}
+	if _, err := handler.shop.InsertPendingOrder("cs_test_expired", &shopdata.Order{
+		Currency:      "usd",
+		StockReserved: 1,
+		ExpiresAt:     time.Now().Add(time.Hour).Unix(),
+		Lines:         []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 2}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	handler.StripeWebhook(recorder, webhookRequest(t, checkoutExpiredPayload(t, "cs_test_expired"), testWebhookSecret))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	order, err := handler.shop.GetOrderBySessionID("cs_test_expired")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != shopdata.OrderStatusExpired {
+		t.Fatalf("status = %q, want expired", order.Status)
+	}
+
+	item, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Stock != 5 {
+		t.Fatalf("stock = %d, want 5 after releasing the reservation", item.Stock)
+	}
+
+	if len(mailer.messages) != 0 {
+		t.Fatalf("emails = %d, want none for an expired order", len(mailer.messages))
+	}
+}
+
+func TestStripeWebhookExpiredIsIdempotent(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	handler.WithStripe(&fakeStripeClient{}, StripeSettings{WebhookSecret: testWebhookSecret})
+
+	if ok, err := handler.shop.DecrementStock("1", 2); err != nil || !ok {
+		t.Fatalf("setup decrement failed: %v", err)
+	}
+	if _, err := handler.shop.InsertPendingOrder("cs_test_expired_twice", &shopdata.Order{
+		Currency:      "usd",
+		StockReserved: 1,
+		ExpiresAt:     time.Now().Add(time.Hour).Unix(),
+		Lines:         []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 2}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := checkoutExpiredPayload(t, "cs_test_expired_twice")
+	for delivery := 0; delivery < 2; delivery++ {
+		recorder := httptest.NewRecorder()
+		handler.StripeWebhook(recorder, webhookRequest(t, payload, testWebhookSecret))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("delivery %d status = %d, want %d", delivery, recorder.Code, http.StatusOK)
+		}
+	}
+
+	item, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Stock != 5 {
+		t.Fatalf("stock = %d, want 5 with a single release", item.Stock)
+	}
+}
+
+func TestStripeWebhookExpiredLegacyOrderDoesNotRestoreStock(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	handler.WithStripe(&fakeStripeClient{}, StripeSettings{WebhookSecret: testWebhookSecret})
+
+	// A pre-reservation pending order never decremented stock at checkout.
+	if _, err := handler.shop.InsertPendingOrder("cs_test_legacy_expired", &shopdata.Order{
+		Currency: "usd",
+		Lines:    []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 2}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	handler.StripeWebhook(recorder, webhookRequest(t, checkoutExpiredPayload(t, "cs_test_legacy_expired"), testWebhookSecret))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	order, err := handler.shop.GetOrderBySessionID("cs_test_legacy_expired")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != shopdata.OrderStatusExpired {
+		t.Fatalf("status = %q, want expired", order.Status)
+	}
+
+	item, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Stock != 5 {
+		t.Fatalf("stock = %d, want 5 untouched", item.Stock)
+	}
+}
+
+func TestStripeWebhookCompletedForReservedOrderSkipsDecrement(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	mailer := &fakeMailer{}
+	handler.WithStripe(&fakeStripeClient{}, StripeSettings{WebhookSecret: testWebhookSecret}).
+		WithMailer(mailer, "https://www.example.com")
+
+	if ok, err := handler.shop.DecrementStock("1", 2); err != nil || !ok {
+		t.Fatalf("setup decrement failed: %v", err)
+	}
+	if _, err := handler.shop.InsertPendingOrder("cs_test_reserved_paid", &shopdata.Order{
+		Currency:      "usd",
+		StockReserved: 1,
+		ExpiresAt:     time.Now().Add(time.Hour).Unix(),
+		Lines:         []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 2}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := checkoutCompletedPayload(t, "cs_test_reserved_paid", 3600)
+	recorder := httptest.NewRecorder()
+	handler.StripeWebhook(recorder, webhookRequest(t, payload, testWebhookSecret))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	order, err := handler.shop.GetOrderBySessionID("cs_test_reserved_paid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != shopdata.OrderStatusPaid {
+		t.Fatalf("status = %q, want paid", order.Status)
+	}
+
+	// The reservation already decremented stock; the webhook must not again.
+	item, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Stock != 3 {
+		t.Fatalf("stock = %d, want 3 with no second decrement", item.Stock)
+	}
+
+	if len(mailer.messages) != 1 {
+		t.Fatalf("emails = %d, want one order email", len(mailer.messages))
+	}
+}
+
+func TestStripeWebhookExpiredDoesNotRevivePaidReservedOrder(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	handler.WithStripe(&fakeStripeClient{}, StripeSettings{WebhookSecret: testWebhookSecret})
+
+	if ok, err := handler.shop.DecrementStock("1", 2); err != nil || !ok {
+		t.Fatalf("setup decrement failed: %v", err)
+	}
+	if _, err := handler.shop.InsertPendingOrder("cs_test_paid_then_expired", &shopdata.Order{
+		Currency:      "usd",
+		StockReserved: 1,
+		ExpiresAt:     time.Now().Add(time.Hour).Unix(),
+		Lines:         []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 2}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	paid := checkoutCompletedPayload(t, "cs_test_paid_then_expired", 3600)
+	recorder := httptest.NewRecorder()
+	handler.StripeWebhook(recorder, webhookRequest(t, paid, testWebhookSecret))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("paid delivery status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	expired := checkoutExpiredPayload(t, "cs_test_paid_then_expired")
+	recorder = httptest.NewRecorder()
+	handler.StripeWebhook(recorder, webhookRequest(t, expired, testWebhookSecret))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expired delivery status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	order, err := handler.shop.GetOrderBySessionID("cs_test_paid_then_expired")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != shopdata.OrderStatusPaid {
+		t.Fatalf("status = %q, want paid after a late expired event", order.Status)
+	}
+
+	item, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Stock != 3 {
+		t.Fatalf("stock = %d, want 3 with no release for a paid order", item.Stock)
+	}
+}
+
 func TestStripeWebhookIsIdempotent(t *testing.T) {
 	handler, _ := newTestHandler(t)
 	handler.WithStripe(&fakeStripeClient{}, StripeSettings{WebhookSecret: testWebhookSecret})
@@ -885,6 +1257,32 @@ func webhookRequest(t *testing.T, payload []byte, secret string) *http.Request {
 	request.Header.Set("Stripe-Signature", header)
 
 	return request
+}
+
+func checkoutExpiredPayload(t *testing.T, sessionID string) []byte {
+	t.Helper()
+
+	sessionJSON, err := json.Marshal(&stripe.CheckoutSession{ID: sessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	event := struct {
+		ID     string `json:"id"`
+		Object string `json:"object"`
+		Type   string `json:"type"`
+		Data   struct {
+			Object json.RawMessage `json:"object"`
+		} `json:"data"`
+	}{ID: "evt_test", Object: "event", Type: checkoutExpiredEventType}
+	event.Data.Object = sessionJSON
+
+	payload, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return payload
 }
 
 func checkoutCompletedPayload(t *testing.T, sessionID string, amountTotal int64) []byte {

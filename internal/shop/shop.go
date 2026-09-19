@@ -150,6 +150,8 @@ func (m *Model) EnsureSchema() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			StripeSessionID TEXT NOT NULL UNIQUE,
 			Status TEXT NOT NULL DEFAULT 'pending',
+			StockReserved INTEGER NOT NULL DEFAULT 0,
+			ExpiresAt INTEGER NOT NULL DEFAULT 0,
 			CustomerEmail TEXT NOT NULL DEFAULT '',
 			CustomerName TEXT NOT NULL DEFAULT '',
 			ShippingAddress TEXT NOT NULL DEFAULT '',
@@ -235,10 +237,12 @@ func (m *Model) ensureShopItemColumns() error {
 	)
 }
 
-// ensureShopOrderColumns adds order shipping and refund columns that predate
-// the current schema.
+// ensureShopOrderColumns adds the stock-reservation columns and the order
+// shipping and refund columns that predate the current schema.
 func (m *Model) ensureShopOrderColumns() error {
 	return data.EnsureColumns(m.DB, "ShopOrders", []data.Column{
+		{Name: "StockReserved", Definition: "StockReserved INTEGER NOT NULL DEFAULT 0"},
+		{Name: "ExpiresAt", Definition: "ExpiresAt INTEGER NOT NULL DEFAULT 0"},
 		{Name: "ShipName", Definition: "ShipName TEXT NOT NULL DEFAULT ''"},
 		{Name: "ShipLine1", Definition: "ShipLine1 TEXT NOT NULL DEFAULT ''"},
 		{Name: "ShipLine2", Definition: "ShipLine2 TEXT NOT NULL DEFAULT ''"},
