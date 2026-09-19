@@ -4,6 +4,63 @@ HTTP API for the coffee journal, backing
 [thom-website](https://github.com/thomhuang/thom-website).
 Currently following along `Let's Go` by Alex Edwards: https://lets-go.alexedwards.net/
 
+## Request flow
+
+How a request reaches the API and which route groups apply which middleware:
+
+```mermaid
+flowchart LR
+    B[Browser] -->|HTTPS| W[Cloudflare Worker<br/>worker/index.js]
+    W -->|container fetch| S[Go server<br/>Cloudflare Container]
+    S -->|REST API| D1[(Cloudflare D1)]
+    S -->|SigV4 presigned PUT<br/>and DELETE| R2[(Cloudflare R2)]
+    S -->|REST API| ST[Stripe]
+    S -->|REST API| M[Cloudflare Email Service]
+    B -->|presigned upload| R2
+    ST -->|webhook| W
+```
+
+Inside the Go server every request passes `commonMiddleware` (CORS, `Vary:
+Origin`, `nosniff`, request log), then the route determines the remaining
+guards:
+
+```mermaid
+flowchart TB
+    R[request] --> CM[commonMiddleware<br/>CORS · Vary: Origin · nosniff · log]
+    CM --> RT{route group}
+    RT -->|GET /ping| P[health check]
+    RT -->|public GETs| PU[coffee, shop items & brands<br/>Cache-Control: public, max-age=30<br/>drafts only with a valid admin cookie]
+    RT -->|"GET /shop/orders/{sessionId}<br/>GET /shop/orders/view/{token}"| ORD[redacted order / full order<br/>Cache-Control: no-store]
+    RT -->|POST /auth/login| LG[allowed origin → throttle →<br/>bcrypt check → JWT cookie]
+    RT -->|POST /shop/checkout| CK[allowed origin → rate limit →<br/>Stripe session + pending order]
+    RT -->|POST /shop/webhooks/stripe| WH[signature-verified → mark paid →<br/>decrement stock → emails]
+    RT -->|admin cookie routes| AU[RequireAuth → origin check on<br/>mutations → coffee & shop handlers]
+```
+
+Checkout is the most involved flow — the price always comes from the database,
+and payment confirmation arrives through the webhook rather than the browser:
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant S as Go server
+    participant D as D1
+    participant ST as Stripe
+    participant M as Email
+
+    B->>S: POST /shop/checkout
+    S->>D: read item price/stock (never from client)
+    S->>ST: create Checkout Session
+    S->>D: insert pending order + lines
+    S-->>B: session URL
+    B->>ST: pay in hosted checkout
+    ST->>S: webhook checkout.session.completed
+    S->>S: verify signature
+    S->>D: mark paid (pending → paid only)
+    S->>D: conditional stock decrement (oversold → refund)
+    S->>M: buyer order link + operator copy
+```
+
 ## Deployment
 
 The server runs on Cloudflare: the Go binary runs as a Cloudflare Container and
@@ -27,6 +84,7 @@ Public:
 - `GET /coffee`, `GET /coffee/roasters`, `GET /coffee/grinders`, `GET /coffee/{id}`
 - `GET /shop/items`, `GET /shop/items/{id}`, `GET /shop/brands` (admins also see drafts)
 - `GET /shop/orders/{sessionId}` (lookup by unguessable Stripe session id)
+- `GET /shop/orders/view/{token}` (magic link emailed after payment; returns the full order)
 - `POST /auth/login`, `POST /shop/checkout`, `POST /shop/webhooks/stripe`
 
 Authenticated with the session cookie:
@@ -43,6 +101,8 @@ Authenticated with the session cookie:
 ```sh
 cp .env.example .env.local   # non-secret config only
 .\scripts\dev-op.ps1         # 1Password-injected secrets + go run, API on :4000
+# or, on any shell with the 1Password CLI installed:
+op run --env-file=.env.op -- go run ./cmd/server
 ```
 
 `go run ./cmd/server` loads `.env.local` before reading the environment, and
@@ -105,11 +165,15 @@ JWT cookie auth is configured with environment variables:
 - `SECURE_COOKIES`: set to `true` in HTTPS environments; this also switches the auth cookie to the `__Host-` prefixed name. The cookie is always `SameSite=Lax`, since the API is same-origin with the site.
 - `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, `CF_API_TOKEN`, `D1_ENDPOINT`: required. The server only talks to Cloudflare D1. `D1_DATABASE_ID` selects test or production and `D1_ENDPOINT` defaults to the public Cloudflare API. `CF_API_TOKEN` is a secret and is never committed.
 - `EMAIL_ACCOUNT_ID`, `EMAIL_FROM`, `EMAIL_FROM_NAME`, `EMAIL_API_TOKEN`, `PUBLIC_SITE_URL`: buyer order-link email via Cloudflare Email Service. Order email is disabled unless the account id, from address, and token are all set. `PUBLIC_SITE_URL` defaults to the first `CLIENT_ORIGIN_URLS` entry.
+- `ORDER_NOTIFICATION_EMAIL`: optional address that receives a copy of every paid order (best-effort). Unset means disabled.
+- `STRIPE_TAX_ENABLED` (default `false`): enable Stripe Tax; leave off until tax registrations are configured.
+- `STRIPE_SHIPPING_CENTS` (default `1000`): flat US shipping line in cents; set `0` for free shipping.
 
-Generate a bcrypt password hash with:
+Generate a bcrypt password hash with the repository helper (it uses the same
+`golang.org/x/crypto/bcrypt` version and cost the server verifies against):
 
 ```sh
-htpasswd -bnBC 12 "" "your-password" | tr -d ':\n'
+echo "your-password" | go run ./tools/bcryptgen
 ```
 
 The raw password is submitted to `POST /auth/login` from the browser, but HTTPS

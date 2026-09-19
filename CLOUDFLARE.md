@@ -118,8 +118,8 @@ The first deploy can take a few minutes to provision the container.
 ## 6. Load your existing coffee data
 
 The tables are created automatically on first container start. Trigger it once.
-If you still have the legacy `internal/thom.db` SQLite file, export and import
-its rows (the server itself no longer reads it):
+If you still have the legacy `internal/thom.db` SQLite file from an old
+checkout, export and import its rows (the server itself no longer reads it):
 
 ```sh
 curl https://www.thomhuang.com/api/coffee
@@ -216,8 +216,9 @@ npx wrangler secret put STRIPE_SECRET_KEY
 npx wrangler secret put STRIPE_WEBHOOK_SECRET
 ```
 
-`STRIPE_TAX_ENABLED` (default `false`) and `STRIPE_SHIPPING_CENTS` (default `0`,
-meaning no shipping line) are vars in `wrangler.jsonc`. Leave tax off until tax
+`STRIPE_TAX_ENABLED` (default `false`) and `STRIPE_SHIPPING_CENTS` (default
+`1000`, a flat $10 US shipping line; set `0` for free shipping) are vars in
+`wrangler.jsonc`. Leave tax off until tax
 registrations are configured; Stripe rejects `automatic_tax` otherwise.
 
 Point a webhook endpoint at `<server origin>/shop/webhooks/stripe` for the
