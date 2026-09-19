@@ -23,3 +23,15 @@ STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 STRIPE_TAX_ENABLED=false
 STRIPE_SHIPPING_CENTS=0
+
+# Cloudflare Email Service (buyer order links) and operator notifications.
+# EMAIL_API_TOKEN is a secret; order email and notifications stay disabled until
+# EMAIL_ACCOUNT_ID, EMAIL_FROM, and the token are all set. PUBLIC_SITE_URL is
+# optional and defaults to the first client origin. ORDER_NOTIFICATION_EMAIL is
+# a plain address; leave blank to disable the operator copy.
+EMAIL_API_TOKEN=
+EMAIL_ACCOUNT_ID=d267f5667d69d024b78f3435e213c77d
+EMAIL_FROM=orders@thomhuang.com
+EMAIL_FROM_NAME=Thom Huang
+PUBLIC_SITE_URL=
+ORDER_NOTIFICATION_EMAIL=
