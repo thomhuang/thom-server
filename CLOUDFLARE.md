@@ -35,9 +35,9 @@ Verified 2026-09-18: the **test** Worker has `CF_API_TOKEN` set (a
 `secret_text` binding) and its plain-text vars point at `thom-db-test` and
 `listing-images-test`, so the no-fallback server runs against the test database.
 `thom-db-test` already holds the app tables; a container start applies any
-missing tables or columns through `EnsureSchema`. Production pushes are also not
-currently producing Workers Builds, so the deployed `thom-server` is older than
-`main` — deploy manually (below) until the build trigger is fixed.
+missing tables or columns through `EnsureSchema`. Workers Builds deploys
+production from the **`release`** branch, so pushes to `main` do not deploy:
+promote `main` → `release` to ship, or deploy manually (below).
 
 ## Prerequisites
 
@@ -110,8 +110,10 @@ and use:
 - Build command: `npm install`
 - Deploy command: `npx wrangler deploy`
 
-Workers Builds deploys production only. The test Worker is deployed manually with
-`-c wrangler.test.jsonc`.
+Set the **production branch** to `release`. Pushes to `main` do not trigger a
+production build; promote with `git push origin main:release` (a fast-forward)
+when shipping. Workers Builds deploys production only. The test Worker is
+deployed manually with `-c wrangler.test.jsonc`.
 
 The first deploy can take a few minutes to provision the container.
 

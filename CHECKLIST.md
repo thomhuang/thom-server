@@ -35,9 +35,10 @@ dated note when something changes.
       `ADMIN_PASSWORD_HASH`, `JWT_SECRET`, `CF_API_TOKEN`, `R2_ACCESS_KEY_ID`,
       `R2_SECRET_ACCESS_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
       (see `CLOUDFLARE.md`).
-- [ ] Fix the production Workers Builds trigger (pushes currently produce no
-      builds, so the deployed `thom-server` can lag `main`) or keep deploying
-      manually with `npx wrangler deploy`.
+- [ ] Production deploys run from the `release` branch (Workers Builds), so
+      shipping means promoting `main` → `release` (`git push origin main:release`)
+      or deploying manually with `npx wrangler deploy`. Confirm the build for
+      `27547c3` succeeded under Workers & Pages → thom-server → Builds.
 - [ ] Verify the Stripe webhook endpoint (`/shop/webhooks/stripe`) subscribes
       to `checkout.session.completed` in both live and test mode with the
       matching signing secret. (2026-09-19: sandbox test-mode endpoints for
@@ -61,5 +62,6 @@ dated note when something changes.
       `StockReserved` column so pre-existing pending orders keep the legacy
       decrement-at-webhook path. (2026-09-19: committed in thom-server
       `2073951` and thom-website `55795f8`, both pushed. Remaining operator
-      steps: deploy both repos, confirm the live webhook signing secret
-      matches `STRIPE_WEBHOOK_SECRET` — see the webhook item above.)
+      steps: ship via the `release` branch (the production branch) or a manual
+      deploy, and confirm the live webhook signing secret matches
+      `STRIPE_WEBHOOK_SECRET` — see the webhook item above.)
