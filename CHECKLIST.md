@@ -4,22 +4,6 @@ Action items for the human operator. Agents work from `AGENTS.md`; this file is
 what the owner still needs to do. Check items off as they are done and add a
 dated note when something changes.
 
-## This repo (uncommitted work)
-
-- [x] Commit the pending working-tree changes: the flat $10 shipping default
-      (`STRIPE_SHIPPING_CENTS=1000` in `wrangler.jsonc`, `wrangler.test.jsonc`,
-      `.env.example`, `.dev.vars.example`, and `defaultShippingCents` in
-      `internal/server/config.go`) and the login diagnostics
-      (`authConfigIssue`/`credentialMatch` logging in
-      `internal/server/auth`). Both are covered by tests.
-      (2026-09-19: committed as `459718f` and `04cf1ce`.)
-- [x] Delete `SERVER_HANDOFF.md` — items A (worker email var forwarding) and B
-      (cache headers, D1 round-trip collapse) are implemented and committed.
-      (2026-09-19: deleted from disk; never committed.)
-- [x] Refresh `~/Repos/STATUS.md` — it still says `thom-server` main is
-      `c93ab1a` and clean; it is `2e092ff` with pending changes.
-      (2026-09-19: refreshed to `b0bb547` / `d208795`, both pushed.)
-
 ## Cloudflare / Stripe / email
 
 - [x] Onboard `thomhuang.com` for Email Sending (dashboard: Compute & AI →

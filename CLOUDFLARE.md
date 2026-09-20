@@ -235,7 +235,7 @@ cancel redirects are derived from the first `CLIENT_ORIGIN_URLS` entry
 
 Checkout collects a shipping address and is restricted to **US** destinations
 (`shipping_address_collection.allowed_countries` in
-`internal/server/shop/orders.go`). The address is read from the session's
+`internal/server/shop/stripe.go`). The address is read from the session's
 `collected_information.shipping_details` on `checkout.session.completed` and
 stored on `ShopOrders`. An oversold order is voided when its PaymentIntent is
 still uncaptured, otherwise refunded, and moves to `refunded`.

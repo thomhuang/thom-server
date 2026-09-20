@@ -236,5 +236,5 @@ suggested labels; it is not enforced.
 | `measurements[].valueInches` | Inches, `0 < v ≤ 100`, rounded to one decimal |
 
 Absence is a missing row — there is no zero sentinel. `ensureShopItemColumns` in
-`internal/shop/shop.go` creates the table and drops the legacy flat columns
+`internal/shop/schema.go` creates the table and drops the legacy flat columns
 (`PitToPitInches`, `BackLengthInches`, `ShoulderInches`) via `data.DropColumns`.

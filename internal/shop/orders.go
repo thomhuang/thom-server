@@ -1,10 +1,6 @@
 package shop
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,29 +77,6 @@ type PaidDetails struct {
 	AmountTotalCents int
 	Currency         string
 	ViewTokenHash    string
-}
-
-// NewOrderViewToken returns a random bearer token for the buyer's order link and
-// the hash stored for it. Only the hash is persisted; the raw token is emailed
-// and never written to the database.
-func NewOrderViewToken() (string, string, error) {
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", "", err
-	}
-
-	token := base64.RawURLEncoding.EncodeToString(raw)
-
-	return token, HashOrderViewToken(token), nil
-}
-
-// HashOrderViewToken hashes a view token for storage and lookup. Tokens are
-// high-entropy random values, so a plain SHA-256 is enough; there is no
-// dictionary to slow down.
-func HashOrderViewToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-
-	return hex.EncodeToString(sum[:])
 }
 
 // orderColumns is the full column list every single-order read scans. It is a
@@ -184,9 +157,6 @@ func (m *Model) GetOrderByViewToken(tokenHash string) (*Order, error) {
 // never caller input. The lines resolve the order id through a subquery so the
 // two reads can run together instead of as two sequential D1 round trips.
 func (m *Model) getOrder(where string, arg any) (*Order, error) {
-	order := &Order{}
-	var orderID int
-
 	var (
 		lines    []*OrderLine
 		linesErr error
@@ -199,40 +169,16 @@ func (m *Model) getOrder(where string, arg any) (*Order, error) {
 		lines, linesErr = m.getOrderLinesByOrder(where, arg)
 	}()
 
-	err := m.DB.QueryRow(
+	order, _, err := scanOrder(m.DB.QueryRow(
 		`SELECT `+orderColumns+`
 		 FROM ShopOrders
 		 WHERE `+where,
 		arg,
-	).Scan(
-		&orderID,
-		&order.StripeSessionID,
-		&order.Status,
-		&order.CustomerEmail,
-		&order.CustomerName,
-		&order.ShippingAddress,
-		&order.ShipName,
-		&order.ShipLine1,
-		&order.ShipLine2,
-		&order.ShipCity,
-		&order.ShipState,
-		&order.ShipPostalCode,
-		&order.ShipCountry,
-		&order.AmountTotalCents,
-		&order.Currency,
-		&order.RefundedAt,
-		&order.RefundReason,
-		&order.CreatedAt,
-		&order.UpdatedAt,
-		&order.StockReserved,
-		&order.ExpiresAt,
-	)
+	))
 	if err != nil {
 		wg.Wait()
 		return nil, data.NoRecord(err)
 	}
-
-	order.ID = strconv.Itoa(orderID)
 
 	wg.Wait()
 	if linesErr != nil {
@@ -265,37 +211,12 @@ func (m *Model) ListOrdersPage(limit, cursor int) ([]*Order, int, error) {
 	orders := make([]*Order, 0)
 	orderIDs := make([]int, 0)
 	for rows.Next() {
-		order := &Order{}
-		var orderID int
-
-		if err = rows.Scan(
-			&orderID,
-			&order.StripeSessionID,
-			&order.Status,
-			&order.CustomerEmail,
-			&order.CustomerName,
-			&order.ShippingAddress,
-			&order.ShipName,
-			&order.ShipLine1,
-			&order.ShipLine2,
-			&order.ShipCity,
-			&order.ShipState,
-			&order.ShipPostalCode,
-			&order.ShipCountry,
-			&order.AmountTotalCents,
-			&order.Currency,
-			&order.RefundedAt,
-			&order.RefundReason,
-			&order.CreatedAt,
-			&order.UpdatedAt,
-			&order.StockReserved,
-			&order.ExpiresAt,
-		); err != nil {
+		order, orderID, err := scanOrder(rows)
+		if err != nil {
 			rows.Close()
 			return nil, 0, err
 		}
 
-		order.ID = strconv.Itoa(orderID)
 		orders = append(orders, order)
 		orderIDs = append(orderIDs, orderID)
 	}
@@ -324,45 +245,8 @@ func (m *Model) ListOrdersPage(limit, cursor int) ([]*Order, int, error) {
 		return orders, 0, nil
 	}
 
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(orderIDs)), ",")
-	args := make([]any, len(orderIDs))
-	for i, orderID := range orderIDs {
-		args[i] = orderID
-	}
-
-	linesByOrder := make(map[int][]*OrderLine)
-	lineRows, err := m.DB.Query(
-		`SELECT OrderID, id, ItemID, Title, UnitPriceCents, Quantity
-		 FROM ShopOrderLines
-		 WHERE OrderID IN (`+placeholders+`)
-		 ORDER BY OrderID ASC, id ASC`,
-		args...,
-	)
+	linesByOrder, err := m.loadOrderLines(orderIDs)
 	if err != nil {
-		return nil, 0, err
-	}
-	defer lineRows.Close()
-
-	for lineRows.Next() {
-		line := &OrderLine{}
-		var orderID, lineID int
-
-		if err = lineRows.Scan(
-			&orderID,
-			&lineID,
-			&line.ItemID,
-			&line.Title,
-			&line.UnitPriceCents,
-			&line.Quantity,
-		); err != nil {
-			return nil, 0, err
-		}
-
-		line.ID = strconv.Itoa(lineID)
-		linesByOrder[orderID] = append(linesByOrder[orderID], line)
-	}
-
-	if err = lineRows.Err(); err != nil {
 		return nil, 0, err
 	}
 
@@ -377,229 +261,91 @@ func (m *Model) ListOrdersPage(limit, cursor int) ([]*Order, int, error) {
 	return orders, nextCursor, nil
 }
 
-// MarkOrderPaid records a confirmed payment. Stripe retries webhooks
-// aggressively, so the status guard makes this idempotent: only a pending
-// order can become paid. A redelivery of a paid, refund_pending, or refunded
-// order updates no rows and reports false, so it can never revive a refund.
-func (m *Model) MarkOrderPaid(sessionID string, details PaidDetails) (bool, error) {
-	result, err := m.DB.Exec(
-		`UPDATE ShopOrders
-		 SET Status = ?,
-			CustomerEmail = ?,
-			CustomerName = ?,
-			ShippingAddress = ?,
-			ShipName = ?,
-			ShipLine1 = ?,
-			ShipLine2 = ?,
-			ShipCity = ?,
-			ShipState = ?,
-			ShipPostalCode = ?,
-			ShipCountry = ?,
-			AmountTotalCents = ?,
-			Currency = ?,
-			ViewTokenHash = ?,
-			UpdatedAt = datetime('now')
-		 WHERE StripeSessionID = ? AND Status = ?`,
-		OrderStatusPaid,
-		details.CustomerEmail,
-		details.CustomerName,
-		details.ShippingAddress,
-		details.ShipName,
-		details.ShipLine1,
-		details.ShipLine2,
-		details.ShipCity,
-		details.ShipState,
-		details.ShipPostalCode,
-		details.ShipCountry,
-		details.AmountTotalCents,
-		currencyOr(details.Currency),
-		details.ViewTokenHash,
-		sessionID,
-		OrderStatusPending,
+// scanOrder reads one row selected with orderColumns. The numeric id is
+// returned separately because it is only ever exposed as a string.
+func scanOrder(s scanner) (*Order, int, error) {
+	order := &Order{}
+	var orderID int
+
+	err := s.Scan(
+		&orderID,
+		&order.StripeSessionID,
+		&order.Status,
+		&order.CustomerEmail,
+		&order.CustomerName,
+		&order.ShippingAddress,
+		&order.ShipName,
+		&order.ShipLine1,
+		&order.ShipLine2,
+		&order.ShipCity,
+		&order.ShipState,
+		&order.ShipPostalCode,
+		&order.ShipCountry,
+		&order.AmountTotalCents,
+		&order.Currency,
+		&order.RefundedAt,
+		&order.RefundReason,
+		&order.CreatedAt,
+		&order.UpdatedAt,
+		&order.StockReserved,
+		&order.ExpiresAt,
 	)
 	if err != nil {
-		return false, err
+		return nil, 0, err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
+	order.ID = strconv.Itoa(orderID)
 
-	return rowsAffected > 0, nil
+	return order, orderID, nil
 }
 
-// MarkOrderRefundPending records a refund request against a paid order. It only
-// moves a paid order, so a repeated request updates nothing and reports false.
-func (m *Model) MarkOrderRefundPending(sessionID, reason string) (bool, error) {
-	result, err := m.DB.Exec(
-		`UPDATE ShopOrders
-		 SET Status = ?, RefundReason = ?, UpdatedAt = datetime('now')
-		 WHERE StripeSessionID = ? AND Status = ?`,
-		OrderStatusRefundPending,
-		reason,
-		sessionID,
-		OrderStatusPaid,
+// loadOrderLines returns the lines of the given orders keyed by order id. The
+// list cursor must already be closed: the pool can be a single connection, so a
+// nested query while rows are open would block.
+func (m *Model) loadOrderLines(orderIDs []int) (map[int][]*OrderLine, error) {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(orderIDs)), ",")
+	args := make([]any, len(orderIDs))
+	for i, orderID := range orderIDs {
+		args[i] = orderID
+	}
+
+	lineRows, err := m.DB.Query(
+		`SELECT OrderID, id, ItemID, Title, UnitPriceCents, Quantity
+		 FROM ShopOrderLines
+		 WHERE OrderID IN (`+placeholders+`)
+		 ORDER BY OrderID ASC, id ASC`,
+		args...,
 	)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
+	defer lineRows.Close()
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
+	linesByOrder := make(map[int][]*OrderLine)
+	for lineRows.Next() {
+		line := &OrderLine{}
+		var orderID, lineID int
 
-	return rowsAffected > 0, nil
-}
-
-// MarkOrderRefunded confirms a refund and stamps the time. It accepts a paid
-// order (no refund request first) or one that is already refund_pending.
-func (m *Model) MarkOrderRefunded(sessionID string) (bool, error) {
-	result, err := m.DB.Exec(
-		`UPDATE ShopOrders
-		 SET Status = ?, RefundedAt = datetime('now'), UpdatedAt = datetime('now')
-		 WHERE StripeSessionID = ? AND Status IN (?, ?)`,
-		OrderStatusRefunded,
-		sessionID,
-		OrderStatusPaid,
-		OrderStatusRefundPending,
-	)
-	if err != nil {
-		return false, err
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-
-	return rowsAffected > 0, nil
-}
-
-// MarkOrderExpired records an expired Checkout Session. Only a pending order
-// can expire, so a redelivered event or a race with payment updates nothing
-// and reports false.
-func (m *Model) MarkOrderExpired(sessionID string) (bool, error) {
-	result, err := m.DB.Exec(
-		`UPDATE ShopOrders
-		 SET Status = ?, UpdatedAt = datetime('now')
-		 WHERE StripeSessionID = ? AND Status = ?`,
-		OrderStatusExpired,
-		sessionID,
-		OrderStatusPending,
-	)
-	if err != nil {
-		return false, err
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-
-	return rowsAffected > 0, nil
-}
-
-// ReleaseExpiredReservations restores the stock held by reservations whose
-// hold window has passed and marks their orders expired. It is the lazy sweep
-// behind the checkout.session.expired webhook, so a missed webhook delivery
-// can never strand stock. Each order is marked before its stock is restored:
-// whoever wins that status transition owns the stock, so a concurrent payment
-// or webhook can never restore and decrement the same reservation twice.
-func (m *Model) ReleaseExpiredReservations(now int64) error {
-	rows, err := m.DB.Query(
-		`SELECT StripeSessionID
-		 FROM ShopOrders
-		 WHERE Status = ? AND StockReserved = 1 AND ExpiresAt > 0 AND ExpiresAt <= ?`,
-		OrderStatusPending,
-		now,
-	)
-	if err != nil {
-		return err
-	}
-
-	var sessionIDs []string
-	for rows.Next() {
-		var sessionID string
-		if err = rows.Scan(&sessionID); err != nil {
-			rows.Close()
-			return err
-		}
-		sessionIDs = append(sessionIDs, sessionID)
-	}
-	if err = rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err = rows.Close(); err != nil {
-		return err
-	}
-
-	for _, sessionID := range sessionIDs {
-		order, err := m.getOrder("StripeSessionID = ?", sessionID)
-		if err != nil {
-			return err
+		if err = lineRows.Scan(
+			&orderID,
+			&lineID,
+			&line.ItemID,
+			&line.Title,
+			&line.UnitPriceCents,
+			&line.Quantity,
+		); err != nil {
+			return nil, err
 		}
 
-		changed, err := m.MarkOrderExpired(sessionID)
-		if err != nil {
-			return err
-		}
-		if !changed {
-			continue
-		}
-
-		for _, line := range order.Lines {
-			if err = m.RestoreStock(line.ItemID, line.Quantity); err != nil {
-				return err
-			}
-		}
+		line.ID = strconv.Itoa(lineID)
+		linesByOrder[orderID] = append(linesByOrder[orderID], line)
 	}
 
-	return nil
-}
-
-// RestoreStock puts a refunded or cancelled line's quantity back on a listing.
-// A non-positive quantity is a no-op.
-func (m *Model) RestoreStock(itemID string, quantity int) error {
-	if quantity < 1 {
-		return nil
+	if err = lineRows.Err(); err != nil {
+		return nil, err
 	}
 
-	_, err := m.DB.Exec(
-		`UPDATE ShopItems SET Stock = Stock + ? WHERE id = ?`,
-		quantity,
-		itemID,
-	)
-
-	return err
-}
-
-// DecrementStock lowers a listing's stock only when enough remains. D1 has no
-// interactive transactions, so the conditional UPDATE plus RowsAffected check
-// is what prevents overselling. It reports whether the stock was available.
-func (m *Model) DecrementStock(itemID string, quantity int) (bool, error) {
-	if quantity < 1 {
-		return false, nil
-	}
-
-	result, err := m.DB.Exec(
-		`UPDATE ShopItems SET Stock = Stock - ? WHERE id = ? AND Stock >= ?`,
-		quantity,
-		itemID,
-		quantity,
-	)
-	if err != nil {
-		return false, err
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-
-	return rowsAffected > 0, nil
+	return linesByOrder, nil
 }
 
 // getOrderLinesByOrder returns the lines of the order matching where/arg. where
