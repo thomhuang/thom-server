@@ -67,3 +67,22 @@ func TestModelUpsertRoasterReturnsExistingIDConflict(t *testing.T) {
 		t.Fatalf("expected stored roaster name to remain Shoebox, got %q", roaster.Roaster)
 	}
 }
+
+func TestModelUpsertRoasterCachesByName(t *testing.T) {
+	model := newTestModel(t)
+
+	first, err := model.UpsertRoaster(&Roaster{Roaster: "Shoebox"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A different case must hit the same cache entry rather than re-querying D1.
+	second, err := model.UpsertRoaster(&Roaster{Roaster: "SHOEBOX"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if first != second {
+		t.Fatal("expected the second upsert to be served from the lookup cache")
+	}
+}

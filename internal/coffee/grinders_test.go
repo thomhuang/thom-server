@@ -59,3 +59,22 @@ func TestModelUpsertGrinderReturnsExistingNameConflict(t *testing.T) {
 		t.Fatalf("expected existing grinder ID fellow-ode, got %q", grinder.ID)
 	}
 }
+
+func TestModelUpsertGrinderCachesByName(t *testing.T) {
+	model := newTestModel(t)
+
+	first, err := model.UpsertGrinder(&Grinder{Grinder: "Fellow Ode"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A different case must hit the same cache entry rather than re-querying D1.
+	second, err := model.UpsertGrinder(&Grinder{Grinder: "FELLOW ODE"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if first != second {
+		t.Fatal("expected the second upsert to be served from the lookup cache")
+	}
+}

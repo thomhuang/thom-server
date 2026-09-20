@@ -40,6 +40,20 @@ func (m *Model) UpsertRoaster(roaster *Roaster) (*Roaster, error) {
 }
 
 func (m *Model) upsertRoaster(roaster *Roaster) (*Roaster, error) {
+	if cached, ok := m.cachedRoaster(roaster.Roaster); ok {
+		return cached, nil
+	}
+
+	resolved, err := m.upsertRoasterUncached(roaster)
+	if err != nil {
+		return nil, err
+	}
+
+	m.storeRoaster(resolved.Roaster, resolved)
+	return resolved, nil
+}
+
+func (m *Model) upsertRoasterUncached(roaster *Roaster) (*Roaster, error) {
 	existingRoaster, err := getRoasterByName(m.DB, roaster.Roaster)
 	if err == nil {
 		return existingRoaster, nil

@@ -40,6 +40,20 @@ func (m *Model) UpsertGrinder(grinder *Grinder) (*Grinder, error) {
 }
 
 func (m *Model) upsertGrinder(grinder *Grinder) (*Grinder, error) {
+	if cached, ok := m.cachedGrinder(grinder.Grinder); ok {
+		return cached, nil
+	}
+
+	resolved, err := m.upsertGrinderUncached(grinder)
+	if err != nil {
+		return nil, err
+	}
+
+	m.storeGrinder(resolved.Grinder, resolved)
+	return resolved, nil
+}
+
+func (m *Model) upsertGrinderUncached(grinder *Grinder) (*Grinder, error) {
 	existingGrinder, err := getGrinderByName(m.DB, grinder.Grinder)
 	if err == nil {
 		return existingGrinder, nil

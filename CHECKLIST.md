@@ -31,9 +31,20 @@ dated note when something changes.
       live endpoint was created in Workbench with both events. Remaining:
       confirm its signing secret matches the production
       `STRIPE_WEBHOOK_SECRET` Worker secret.)
+- [x] (2026-09-20) Set zone `browser_cache_ttl` to `0` ("Respect Existing
+      Headers") on `thomhuang.com`, so public API responses reach browsers as
+      the server's `max-age=30` instead of a forced 4 hours. No Cache Rules or
+      Page Rules exist; the 4-hour value was the zone setting. Revert by
+      setting `browser_cache_ttl` back to `14400` if needed.
 
 ## Website repo (thom-website)
 
+- [ ] Ship the public-API cache fix (`worker/index.js`): always-public paths
+      (`/coffee`, `/coffee/roasters`, `/coffee/grinders`, `/coffee/{id}`,
+      `/shop/brands`) stay cached when the request carries the auth cookie, so a
+      logged-in admin no longer pays an origin round trip on every read, while
+      `/shop/items` and `/shop/items/{id}` still bypass on cookie so drafts stay
+      visible. Promote `main` → `release` to deploy.
 - [x] Promote `origin/main` → `origin/release` when the shop is ready
       (2026-09-19: fast-forwarded `535b89f..d208795`; local `release` branch
       updated too.)
