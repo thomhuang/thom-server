@@ -12,7 +12,7 @@ import (
 // when requested by an authenticated admin.
 func (m *Model) GetItems(includeUnpublished bool) ([]*ItemSummary, error) {
 	stmt := `
-		SELECT i.id, i.Title, i.BrandID, i.Brand, i.PriceCents, i.Currency, i.Stock, i.IsPublished,
+		SELECT i.id, i.Title, i.BrandID, i.Brand, i.Category, i.PriceCents, i.Currency, i.Stock, i.IsPublished,
 			COALESCE((
 				SELECT image.ObjectKey
 				FROM ShopItemImages image
@@ -44,6 +44,7 @@ func (m *Model) GetItems(includeUnpublished bool) ([]*ItemSummary, error) {
 			&item.Title,
 			&item.BrandID,
 			&item.Brand,
+			&item.Category,
 			&item.PriceCents,
 			&item.Currency,
 			&item.Stock,

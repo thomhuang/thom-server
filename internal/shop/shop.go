@@ -75,6 +75,7 @@ type ItemSummary struct {
 	Title           string `json:"title"`
 	BrandID         string `json:"brandId"`
 	Brand           string `json:"brand"`
+	Category        string `json:"category"`
 	PriceCents      int    `json:"priceCents"`
 	Currency        string `json:"currency"`
 	Stock           int    `json:"stock"`
