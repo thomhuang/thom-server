@@ -24,8 +24,11 @@ func TestCheckoutUsesDatabasePriceAndRecordsPendingOrder(t *testing.T) {
 		t.Fatalf("status = %d, want %d (%s)", rr.Code, http.StatusCreated, rr.Body.String())
 	}
 
-	if stripeClient.lastParams.UnitPriceCents != 1800 {
-		t.Fatalf("unit price = %d, want 1800 from the database", stripeClient.lastParams.UnitPriceCents)
+	if len(stripeClient.lastParams.Lines) != 1 {
+		t.Fatalf("lines = %d, want 1", len(stripeClient.lastParams.Lines))
+	}
+	if stripeClient.lastParams.Lines[0].UnitPriceCents != 1800 {
+		t.Fatalf("unit price = %d, want 1800 from the database", stripeClient.lastParams.Lines[0].UnitPriceCents)
 	}
 	if stripeClient.lastParams.ShippingCents != 500 {
 		t.Fatalf("shipping cents = %d, want 500", stripeClient.lastParams.ShippingCents)
@@ -40,6 +43,71 @@ func TestCheckoutUsesDatabasePriceAndRecordsPendingOrder(t *testing.T) {
 	}
 	if len(order.Lines) != 1 || order.Lines[0].UnitPriceCents != 1800 {
 		t.Fatalf("lines = %+v, want the price snapshot", order.Lines)
+	}
+}
+
+func TestCheckoutReservesMultipleItemsInOneOrder(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	stripeClient := &fakeStripeClient{}
+	handler.WithStripe(stripeClient, StripeSettings{
+		SuccessURL:    "http://localhost:3000/shop/order",
+		CancelURL:     "http://localhost:3000/shop",
+		ShippingCents: 500,
+	})
+
+	rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout",
+		`{"items":[{"itemId":"1","quantity":2},{"itemId":"2","quantity":3}]}`)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (%s)", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+
+	if len(stripeClient.lastParams.Lines) != 2 {
+		t.Fatalf("stripe lines = %d, want 2", len(stripeClient.lastParams.Lines))
+	}
+	if stripeClient.lastParams.Lines[0].UnitPriceCents != 1800 ||
+		stripeClient.lastParams.Lines[1].UnitPriceCents != 2200 {
+		t.Fatalf("stripe lines = %+v, want database prices", stripeClient.lastParams.Lines)
+	}
+
+	order, err := handler.shop.GetOrderBySessionID("cs_test_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(order.Lines) != 2 {
+		t.Fatalf("order lines = %d, want 2", len(order.Lines))
+	}
+
+	mug, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beans, err := handler.shop.GetItemByID(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mug.Stock != 3 || beans.Stock != 7 {
+		t.Fatalf("stock = mug %d / beans %d, want 3 / 7", mug.Stock, beans.Stock)
+	}
+}
+
+func TestCheckoutRestoresAllStockWhenOneItemIsUnavailable(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	handler.WithStripe(&fakeStripeClient{}, StripeSettings{})
+
+	// Item 1 has stock 5; requesting 4 for it and 1 for the draft item (3)
+	// must restore the 4 already reserved from item 1.
+	rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout",
+		`{"items":[{"itemId":"1","quantity":4},{"itemId":"3","quantity":1}]}`)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusNotFound)
+	}
+
+	item, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Stock != 5 {
+		t.Fatalf("stock = %d, want 5 restored after the failed checkout", item.Stock)
 	}
 }
 

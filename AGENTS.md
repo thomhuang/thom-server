@@ -156,6 +156,13 @@ section only records durable gotchas; operator action items live in
   expired so it can never be paid unreserved. Requires
   `checkout.session.expired` in the Stripe webhook subscription and a
   thom-website admin-UI change for the `expired` status.
+- **Checkout is multi-line.** `POST /shop/checkout` takes
+  `{ "items": [{ "itemId", "quantity" }] }`; the legacy single-item
+  `{ "itemId", "quantity" }` body is still accepted so an older storefront keeps
+  working against a newer server. Stock is reserved for every line
+  all-or-nothing (earlier reservations are restored if any line fails), and the
+  pending order snapshots one `ShopOrderLine` per item. The Stripe session has
+  one line item per cart line plus the flat shipping line.
 - **`GET /shop/orders/{sessionId}` is public and returns no personal data.** It
   serves the buyer's confirmation page, keyed only on the Stripe session id, so
   it returns status/total/lines and omits customer name, email, and every

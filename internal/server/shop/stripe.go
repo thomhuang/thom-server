@@ -27,8 +27,9 @@ func (c *stripeClient) CreateCheckoutSession(ctx context.Context, params Checkou
 		return nil, ErrStripeNotConfigured
 	}
 
-	lineItems := []*stripe.CheckoutSessionCreateLineItemParams{
-		lineItem(params.Title, params.Currency, params.UnitPriceCents, params.Quantity),
+	lineItems := make([]*stripe.CheckoutSessionCreateLineItemParams, 0, len(params.Lines)+1)
+	for _, line := range params.Lines {
+		lineItems = append(lineItems, lineItem(line.Title, params.Currency, line.UnitPriceCents, line.Quantity))
 	}
 	if params.ShippingCents > 0 {
 		lineItems = append(lineItems, lineItem("Shipping", params.Currency, params.ShippingCents, 1))
@@ -39,7 +40,6 @@ func (c *stripeClient) CreateCheckoutSession(ctx context.Context, params Checkou
 		SuccessURL: stripe.String(params.SuccessURL),
 		CancelURL:  stripe.String(params.CancelURL),
 		LineItems:  lineItems,
-		Metadata:   map[string]string{"itemId": params.ItemID},
 		// Shipping is US-only.
 		ShippingAddressCollection: &stripe.CheckoutSessionCreateShippingAddressCollectionParams{
 			AllowedCountries: []*string{stripe.String("US")},
