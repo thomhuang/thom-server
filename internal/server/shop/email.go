@@ -10,6 +10,11 @@ import (
 	shopdata "thom-server/internal/shop"
 )
 
+// supportEmail is the address buyers are pointed at for order questions. It is
+// a monitored mailbox rather than the sending address, which never accepts
+// replies.
+const supportEmail = "thomaskhuangg@gmail.com"
+
 // WithMailer attaches the transactional email sender and the site URL used to
 // build the buyer's order link. A nil sender leaves order email disabled.
 func (h *Handler) WithMailer(sender mail.Sender, siteURL string) *Handler {
@@ -102,7 +107,28 @@ func orderEmailBody(order *shopdata.Order, link string) (string, string) {
 	}
 
 	fmt.Fprintf(&plain, "\nView your order: %s\n", link)
-	fmt.Fprintf(&markup, "<p><a href=\"%s\">View your order</a></p>\n", html.EscapeString(link))
+	// The URL is repeated as visible text because a link whose anchor text does
+	// not match its target is a weak spam signal.
+	fmt.Fprintf(
+		&markup,
+		"<p><a href=\"%s\">View your order</a><br>%s</p>\n",
+		html.EscapeString(link),
+		html.EscapeString(link),
+	)
+
+	plain.WriteString("\nThis is an automated order confirmation. Please do not reply to this email.\n")
+	fmt.Fprintf(
+		&plain,
+		"For questions about your order, contact %s.\n",
+		supportEmail,
+	)
+	markup.WriteString("<p>This is an automated order confirmation. Please do not reply to this email.</p>\n")
+	fmt.Fprintf(
+		&markup,
+		"<p>For questions about your order, contact <a href=\"mailto:%s\">%s</a>.</p>\n",
+		supportEmail,
+		supportEmail,
+	)
 
 	return plain.String(), markup.String()
 }

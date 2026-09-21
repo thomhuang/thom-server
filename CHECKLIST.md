@@ -21,8 +21,10 @@ dated note when something changes.
       (see `CLOUDFLARE.md`).
 - [ ] Production deploys run from the `release` branch (Workers Builds), so
       shipping means promoting `main` → `release` (`git push origin main:release`)
-      or deploying manually with `npx wrangler deploy`. Confirm the build for
-      `27547c3` succeeded under Workers & Pages → thom-server → Builds.
+      or deploying manually with `npx wrangler deploy`. (2026-09-21: `release` is
+      level with `main` at `fdb74af`; the order-email change was shipped with a
+      manual `wrangler deploy`, so promote `release` to put it back in the build
+      pipeline.)
 - [ ] Verify the Stripe webhook endpoint (`/shop/webhooks/stripe`) subscribes
       to `checkout.session.completed` in both live and test mode with the
       matching signing secret. (2026-09-19: sandbox test-mode endpoints for
@@ -36,6 +38,22 @@ dated note when something changes.
       the server's `max-age=30` instead of a forced 4 hours. No Cache Rules or
       Page Rules exist; the 4-hour value was the zone setting. Revert by
       setting `browser_cache_ttl` back to `14400` if needed.
+- [x] (2026-09-21) Deliverability plumbing for the buyer order email: enabled
+      Email Routing on `thomhuang.com` (root MX + SPF + routing DKIM
+      `cf2024-1`), added `orders@` and `dmarc@` forwarding rules to
+      `thomaskhuang@ucla.edu`, and extended `_dmarc.thomhuang.com` to
+      `v=DMARC1; p=reject; rua=mailto:dmarc@thomhuang.com`. Sending records on
+      `cf-bounce` are unchanged. `orders@` now accepts replies instead of
+      bouncing them.
+- [ ] Improve Gmail placement for `orders@thomhuang.com`. Authentication
+      (SPF/DKIM/DMARC) already passes, so this is a new-sender-reputation
+      problem: register the domain in Google Postmaster Tools, watch Compute &
+      AI → Email Service → Email Sending → Analytics for the DKIM/SPF/DMARC
+      results and spam score, and keep volume low and steady.
+- [ ] Decide whether the buyer email's contact address should stay the
+      hardcoded `supportEmail` constant in `internal/server/shop/email.go` or
+      move to a Worker var the way `ORDER_NOTIFICATION_EMAIL` is kept out of the
+      repo (`thomaskhuangg@gmail.com` is currently committed).
 
 ## Website repo (thom-website)
 
