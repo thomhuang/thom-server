@@ -21,10 +21,10 @@ dated note when something changes.
       (see `CLOUDFLARE.md`).
 - [ ] Production deploys run from the `release` branch (Workers Builds), so
       shipping means promoting `main` → `release` (`git push origin main:release`)
-      or deploying manually with `npx wrangler deploy`. (2026-09-21: `release` is
-      level with `main` at `fdb74af`; the order-email change was shipped with a
-      manual `wrangler deploy`, so promote `release` to put it back in the build
-      pipeline.)
+      or deploying manually with `npx wrangler deploy`. (2026-09-20: promoted
+      `release` to `main` at `c17f684` after the batch publish endpoint; the
+      order-email change had shipped with a manual `wrangler deploy`, so this
+      puts `release` back in the build pipeline.)
 - [ ] Verify the Stripe webhook endpoint (`/shop/webhooks/stripe`) subscribes
       to `checkout.session.completed` in both live and test mode with the
       matching signing secret. (2026-09-19: sandbox test-mode endpoints for
