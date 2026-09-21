@@ -1,6 +1,7 @@
 package shop
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -139,6 +140,17 @@ func TestCheckoutRejectsInsufficientStock(t *testing.T) {
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusConflict)
 	}
+
+	var conflict checkoutConflict
+	if err := json.Unmarshal(rr.Body.Bytes(), &conflict); err != nil {
+		t.Fatal(err)
+	}
+	if conflict.Error != "insufficient_stock" || conflict.ItemID != "1" || conflict.Available != 5 {
+		t.Fatalf("conflict = %+v, want the sold-out item with its available stock", conflict)
+	}
+	if conflict.ReservedUntil != 0 {
+		t.Fatalf("reservedUntil = %d, want 0 when no reservation holds the item", conflict.ReservedUntil)
+	}
 }
 
 func TestCheckoutRejectsNonPositiveQuantity(t *testing.T) {
@@ -180,11 +192,17 @@ func TestCheckoutReservesStockAndSetsSessionExpiry(t *testing.T) {
 		t.Fatalf("stockReserved = %d, want 1", order.StockReserved)
 	}
 	if order.ExpiresAt < before+int64(reservationHold/time.Second) ||
-		order.ExpiresAt > before+int64((reservationHold+reservationExpiryBuffer+2*time.Minute)/time.Second) {
-		t.Fatalf("expiresAt = %d, want roughly now+hold", order.ExpiresAt)
+		order.ExpiresAt > before+int64((reservationHold+2*time.Minute)/time.Second) {
+		t.Fatalf("hold expiresAt = %d, want roughly now+hold", order.ExpiresAt)
 	}
-	if stripeClient.lastParams.ExpiresAt != order.ExpiresAt {
-		t.Fatalf("session expiresAt = %d, want the stored hold %d", stripeClient.lastParams.ExpiresAt, order.ExpiresAt)
+	// The Stripe session outlives the stock hold so the item frees up quickly
+	// while the page stays payable for Stripe's 30-minute minimum.
+	if stripeClient.lastParams.ExpiresAt < before+int64(sessionLifetime/time.Second) ||
+		stripeClient.lastParams.ExpiresAt > before+int64((sessionLifetime+2*time.Minute)/time.Second) {
+		t.Fatalf("session expiresAt = %d, want roughly now+session lifetime", stripeClient.lastParams.ExpiresAt)
+	}
+	if stripeClient.lastParams.ExpiresAt <= order.ExpiresAt {
+		t.Fatalf("session expiresAt = %d, want it after the hold %d", stripeClient.lastParams.ExpiresAt, order.ExpiresAt)
 	}
 }
 
@@ -202,6 +220,19 @@ func TestCheckoutConflictWhenReservationExhaustsStock(t *testing.T) {
 	rr = serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":1}`)
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusConflict)
+	}
+
+	// The first checkout's live hold owns the item, so the conflict reports
+	// when that hold ends instead of calling the item sold out.
+	var conflict checkoutConflict
+	if err := json.Unmarshal(rr.Body.Bytes(), &conflict); err != nil {
+		t.Fatal(err)
+	}
+	if conflict.ItemID != "1" || conflict.Available != 0 {
+		t.Fatalf("conflict = %+v, want item 1 with 0 available", conflict)
+	}
+	if conflict.ReservedUntil <= time.Now().Unix() {
+		t.Fatalf("reservedUntil = %d, want the active hold's expiry", conflict.ReservedUntil)
 	}
 
 	item, err := handler.shop.GetItemByID(1)

@@ -81,6 +81,13 @@ func main() {
 		authState,
 	)
 
+	// Expired checkout holds are released on a timer so an abandoned checkout
+	// frees its item even when no webhook is delivered and no new checkout
+	// arrives to trigger the lazy sweep.
+	sweeperCtx, stopSweeper := context.WithCancel(context.Background())
+	defer stopSweeper()
+	go app.RunReservationSweeper(sweeperCtx)
+
 	srv := &http.Server{
 		Addr:              *addr,
 		ErrorLog:          errorLog,

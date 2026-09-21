@@ -51,6 +51,7 @@ func (app *App) routes() *http.ServeMux {
 
 	mux.HandleFunc("POST /shop/checkout", app.requireAllowedOrigin(app.limitCheckout(shopHandler.Checkout)))
 	mux.HandleFunc("GET /shop/orders", app.auth.RequireAuth(shopHandler.ListOrders))
+	mux.HandleFunc("POST /shop/orders/{sessionId}/release", app.auth.RequireAuth(shopHandler.ReleaseOrderHold))
 	mux.HandleFunc("GET /shop/orders/view/{token}", shopHandler.GetOrderByViewToken)
 	mux.HandleFunc("GET /shop/orders/{sessionId}", shopHandler.GetOrder)
 	mux.HandleFunc("POST /shop/webhooks/stripe", shopHandler.StripeWebhook)

@@ -12,13 +12,18 @@ import (
 )
 
 // reservationHold is how long a checkout keeps its stock reservation before an
-// abandoned session releases it.
-const reservationHold = 30 * time.Minute
+// abandoned session releases it. It is deliberately shorter than the Stripe
+// session lifetime so the item frees up quickly; a buyer who pays after their
+// hold lapsed is caught by the oversold refund path.
+const reservationHold = 10 * time.Minute
 
-// reservationExpiryBuffer pads the Stripe session expiry past the hold so the
-// expires_at value is never below Stripe's 30-minute minimum once clock skew
-// and request latency are applied.
+// reservationExpiryBuffer pads the Stripe session expiry past its 30-minute
+// minimum so clock skew and request latency never push it below the floor.
 const reservationExpiryBuffer = 2 * time.Minute
+
+// sessionLifetime is how long the Stripe Checkout page stays payable. Stripe
+// requires at least 30 minutes, so it is also the ceiling on the reservation.
+const sessionLifetime = 30*time.Minute + reservationExpiryBuffer
 
 // ErrStripeNotConfigured is returned when checkout is requested without an API key.
 var ErrStripeNotConfigured = errors.New("shop: stripe is not configured")
@@ -82,6 +87,17 @@ type checkoutResponse struct {
 	URL       string `json:"url"`
 }
 
+// checkoutConflict explains a 409 so the storefront can tell a buyer whether an
+// item is temporarily held by another checkout or actually sold out.
+// ReservedUntil is set only when a pending reservation currently holds the item.
+type checkoutConflict struct {
+	Error         string `json:"error"`
+	ItemID        string `json:"itemId"`
+	Title         string `json:"title"`
+	Available     int    `json:"available"`
+	ReservedUntil int64  `json:"reservedUntil,omitempty"`
+}
+
 // checkoutLine is a validated request line ready to reserve stock for.
 type checkoutLine struct {
 	itemID   int
@@ -123,14 +139,16 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expiresAt := time.Now().Add(reservationHold + reservationExpiryBuffer)
+	now := time.Now()
+	sessionExpiresAt := now.Add(sessionLifetime)
+	holdExpiresAt := now.Add(reservationHold)
 
-	session, ok := h.createCheckoutSession(w, r, reserved, expiresAt)
+	session, ok := h.createCheckoutSession(w, r, reserved, sessionExpiresAt)
 	if !ok {
 		return
 	}
 
-	order, ok := h.recordPendingOrder(w, r, session, reserved, expiresAt)
+	order, ok := h.recordPendingOrder(w, r, session, reserved, holdExpiresAt)
 	if !ok {
 		return
 	}
@@ -230,7 +248,7 @@ func (h *Handler) reserveCheckoutStock(w http.ResponseWriter, lines []checkoutLi
 		}
 		if !ok {
 			h.infoLog.Printf("checkout for item %d exceeds available stock", line.itemID)
-			h.responder.ClientError(w, http.StatusConflict)
+			h.writeStockConflict(w, item)
 			h.restoreReservations(reserved)
 			return nil, false
 		}
@@ -319,5 +337,29 @@ func (h *Handler) restoreReservations(reserved []*reservedItem) {
 func (h *Handler) restoreReservation(itemID string, quantity int) {
 	if err := h.shop.RestoreStock(itemID, quantity); err != nil {
 		h.infoLog.Printf("failed to restore stock for item %s: %v", itemID, err)
+	}
+}
+
+// writeStockConflict writes the 409 body for a line whose stock could not be
+// reserved. It names the item and, when a pending reservation is holding it,
+// reports when that hold ends so the storefront can offer a retry rather than
+// calling the item sold out.
+func (h *Handler) writeStockConflict(w http.ResponseWriter, item *shopdata.Item) {
+	conflict := checkoutConflict{
+		Error:     "insufficient_stock",
+		ItemID:    item.ID,
+		Title:     item.Title,
+		Available: item.Stock,
+	}
+
+	expiresAt, held, err := h.shop.ReservationHoldingItem(item.ID, time.Now().Unix())
+	if err != nil {
+		h.infoLog.Printf("failed to look up the reservation holding item %s: %v", item.ID, err)
+	} else if held {
+		conflict.ReservedUntil = expiresAt
+	}
+
+	if err := h.responder.WriteJSON(w, http.StatusConflict, conflict, nil); err != nil {
+		h.responder.ServerError(w, err)
 	}
 }

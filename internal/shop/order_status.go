@@ -1,9 +1,11 @@
 package shop
 
 // MarkOrderPaid records a confirmed payment. Stripe retries webhooks
-// aggressively, so the status guard makes this idempotent: only a pending
-// order can become paid. A redelivery of a paid, refund_pending, or refunded
-// order updates no rows and reports false, so it can never revive a refund.
+// aggressively, so the status guard makes this idempotent: a pending order can
+// become paid, and so can an expired one, because a stock hold is released
+// before its Stripe session expires, so a slow buyer can still pay a released
+// order. A redelivery of a paid, refund_pending, or refunded order updates no
+// rows and reports false, so it can never revive a refund.
 func (m *Model) MarkOrderPaid(sessionID string, details PaidDetails) (bool, error) {
 	return m.execChanged(
 		`UPDATE ShopOrders
@@ -22,7 +24,7 @@ func (m *Model) MarkOrderPaid(sessionID string, details PaidDetails) (bool, erro
 			Currency = ?,
 			ViewTokenHash = ?,
 			UpdatedAt = datetime('now')
-		 WHERE StripeSessionID = ? AND Status = ?`,
+		 WHERE StripeSessionID = ? AND Status IN (?, ?)`,
 		OrderStatusPaid,
 		details.CustomerEmail,
 		details.CustomerName,
@@ -39,6 +41,7 @@ func (m *Model) MarkOrderPaid(sessionID string, details PaidDetails) (bool, erro
 		details.ViewTokenHash,
 		sessionID,
 		OrderStatusPending,
+		OrderStatusExpired,
 	)
 }
 
@@ -70,13 +73,15 @@ func (m *Model) MarkOrderRefunded(sessionID string) (bool, error) {
 	)
 }
 
-// MarkOrderExpired records an expired Checkout Session. Only a pending order
-// can expire, so a redelivered event or a race with payment updates nothing
-// and reports false.
+// MarkOrderExpired records an expired Checkout Session and clears StockReserved,
+// because the reservation no longer holds stock. Clearing it means a payment
+// that arrives after the hold lapsed is treated as a fresh sale: it decrements
+// stock and fulfills, or refunds when the item is gone. Only a pending order can
+// expire, so a redelivered event or a race with payment updates nothing.
 func (m *Model) MarkOrderExpired(sessionID string) (bool, error) {
 	return m.execChanged(
 		`UPDATE ShopOrders
-		 SET Status = ?, UpdatedAt = datetime('now')
+		 SET Status = ?, StockReserved = 0, UpdatedAt = datetime('now')
 		 WHERE StripeSessionID = ? AND Status = ?`,
 		OrderStatusExpired,
 		sessionID,

@@ -1,5 +1,10 @@
 package shop
 
+import (
+	"database/sql"
+	"errors"
+)
+
 // ReleaseExpiredReservations restores the stock held by reservations whose
 // hold window has passed and marks their orders expired. It is the lazy sweep
 // behind the checkout.session.expired webhook, so a missed webhook delivery
@@ -79,6 +84,33 @@ func (m *Model) releaseReservation(sessionID string) error {
 	}
 
 	return nil
+}
+
+// ReservationHoldingItem reports the expiry of a pending reservation that
+// currently holds the given item. Checkout uses it to tell a buyer whether an
+// item is reserved by an in-progress checkout or actually sold out.
+func (m *Model) ReservationHoldingItem(itemID string, now int64) (int64, bool, error) {
+	var expiresAt int64
+
+	err := m.DB.QueryRow(
+		`SELECT o.ExpiresAt
+		 FROM ShopOrders o
+		 JOIN ShopOrderLines l ON l.OrderID = o.id
+		 WHERE l.ItemID = ? AND o.Status = ? AND o.StockReserved = 1 AND o.ExpiresAt > ?
+		 ORDER BY o.ExpiresAt ASC
+		 LIMIT 1`,
+		itemID,
+		OrderStatusPending,
+		now,
+	).Scan(&expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+
+	return expiresAt, true, nil
 }
 
 // RestoreStock puts a refunded or cancelled line's quantity back on a listing.

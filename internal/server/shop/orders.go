@@ -151,3 +151,54 @@ func (h *Handler) readOrderListCursor(w http.ResponseWriter, r *http.Request) (i
 
 	return parsed, true
 }
+
+// releaseHoldResponse reports whether the release changed anything, so the admin
+// UI can tell "released" from "already gone".
+type releaseHoldResponse struct {
+	Released bool `json:"released"`
+}
+
+// ReleaseOrderHold frees the stock an abandoned checkout is holding. It expires
+// the Stripe session first so the session can no longer be paid, then marks the
+// order expired and restores its stock. Releasing an order that is no longer
+// pending is a no-op, so a repeated click is safe.
+func (h *Handler) ReleaseOrderHold(w http.ResponseWriter, r *http.Request) {
+	sessionID := strings.TrimSpace(r.PathValue("sessionId"))
+	if sessionID == "" {
+		h.responder.BadRequest(w)
+		return
+	}
+
+	order, err := h.shop.GetOrderBySessionID(sessionID)
+	if h.responder.HandleDataError(w, err) {
+		return
+	}
+
+	if order.Status != shopdata.OrderStatusPending {
+		if err = h.responder.WriteJSON(w, http.StatusOK, releaseHoldResponse{}, nil); err != nil {
+			h.responder.ServerError(w, err)
+		}
+		return
+	}
+
+	if h.stripe != nil {
+		if err = h.stripe.ExpireCheckoutSession(r.Context(), sessionID); err != nil {
+			h.infoLog.Printf("failed to expire session %s while releasing its hold: %v", sessionID, err)
+		}
+	}
+
+	changed, err := h.shop.MarkOrderExpired(sessionID)
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+	if changed && order.StockReserved == 1 {
+		h.restoreStock(order, order.Lines)
+	}
+
+	h.infoLog.Printf("RELEASE_HOLD session=%s order=%s changed=%t", sessionID, order.ID, changed)
+
+	if err = h.responder.WriteJSON(w, http.StatusOK, releaseHoldResponse{Released: changed}, nil); err != nil {
+		h.responder.ServerError(w, err)
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/stripe/stripe-go/v86"
 
 	"thom-server/internal/mail"
+	shopdata "thom-server/internal/shop"
 )
 
 const testWebhookSecret = "whsec_test"
@@ -148,4 +149,79 @@ func checkoutCompletedPayloadForSession(t *testing.T, session *stripe.CheckoutSe
 	}
 
 	return payload
+}
+
+func TestReleaseOrderHoldExpiresSessionAndRestoresStock(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	stripeClient := &fakeStripeClient{}
+	handler.WithStripe(stripeClient, StripeSettings{})
+
+	// Item 1 has a stock of 5; take all of it so the hold is observable.
+	if rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":5}`); rr.Code != http.StatusCreated {
+		t.Fatalf("setup status = %d, want %d (%s)", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+
+	rr := serve(handler.ReleaseOrderHold, http.MethodPost, "/shop/orders/cs_test_123/release", "", "sessionId", "cs_test_123")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var released releaseHoldResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &released); err != nil {
+		t.Fatal(err)
+	}
+	if !released.Released {
+		t.Fatal("released = false, want true")
+	}
+
+	order, err := handler.shop.GetOrderBySessionID("cs_test_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != shopdata.OrderStatusExpired {
+		t.Fatalf("status = %q, want expired", order.Status)
+	}
+
+	item, err := handler.shop.GetItemByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Stock != 5 {
+		t.Fatalf("stock = %d, want 5 after the hold was released", item.Stock)
+	}
+
+	if len(stripeClient.expiredSessions) != 1 || stripeClient.expiredSessions[0] != "cs_test_123" {
+		t.Fatalf("expired sessions = %v, want [cs_test_123]", stripeClient.expiredSessions)
+	}
+}
+
+func TestReleaseOrderHoldLeavesNonPendingOrdersAlone(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	stripeClient := &fakeStripeClient{}
+	handler.WithStripe(stripeClient, StripeSettings{})
+
+	if rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":1}`); rr.Code != http.StatusCreated {
+		t.Fatalf("setup status = %d, want %d", rr.Code, http.StatusCreated)
+	}
+
+	// The order is no longer pending, so there is nothing to release.
+	if _, err := handler.shop.MarkOrderExpired("cs_test_123"); err != nil {
+		t.Fatal(err)
+	}
+
+	rr := serve(handler.ReleaseOrderHold, http.MethodPost, "/shop/orders/cs_test_123/release", "", "sessionId", "cs_test_123")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var released releaseHoldResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &released); err != nil {
+		t.Fatal(err)
+	}
+	if released.Released {
+		t.Fatal("released = true for an order that is not pending")
+	}
+	if len(stripeClient.expiredSessions) != 0 {
+		t.Fatalf("expired sessions = %v, want none for a non-pending order", stripeClient.expiredSessions)
+	}
 }
