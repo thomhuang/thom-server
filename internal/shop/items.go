@@ -2,6 +2,7 @@ package shop
 
 import (
 	"strconv"
+	"strings"
 	"sync"
 
 	"thom-server/internal/data"
@@ -236,6 +237,39 @@ func (m *Model) UpdateItem(id int, item *Item) (*Item, error) {
 	}
 
 	return m.GetItemByID(id)
+}
+
+// SetItemsPublished publishes or unpublishes a batch of listings in one
+// statement and returns how many rows matched. Unknown ids are ignored, so the
+// call is idempotent and a listing deleted after it was selected is not an
+// error.
+func (m *Model) SetItemsPublished(ids []int, published bool) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, boolToInt(published))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+
+	result, err := m.DB.Exec(
+		`UPDATE ShopItems SET IsPublished = ?, UpdatedAt = datetime('now') WHERE id IN (`+placeholders+`)`,
+		args...,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+
+	return int(rowsAffected), nil
 }
 
 // DeleteItem removes a listing and returns the images that were attached, so

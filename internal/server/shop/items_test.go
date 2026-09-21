@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 	"testing"
 
 	shopdata "thom-server/internal/shop"
@@ -338,5 +340,81 @@ func TestReadPositiveIntPathRejectsNonPositive(t *testing.T) {
 				t.Fatalf("expected status %d for %q, got %d", http.StatusBadRequest, value, rr.Code)
 			}
 		})
+	}
+}
+
+func TestSetItemsPublishedPublishesBatch(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	rr := serve(handler.SetItemsPublished, http.MethodPatch, "/shop/items", `{"ids":[3],"isPublished":true}`)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d (%s)", http.StatusOK, rr.Code, rr.Body.String())
+	}
+
+	var result struct {
+		Updated int `json:"updated"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Updated != 1 {
+		t.Fatalf("expected updated 1, got %d", result.Updated)
+	}
+
+	item, err := handler.shop.GetItemByID(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !item.IsPublished {
+		t.Fatal("expected item 3 to be published")
+	}
+}
+
+func TestSetItemsPublishedUnpublishesBatch(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	rr := serve(handler.SetItemsPublished, http.MethodPatch, "/shop/items", `{"ids":[1,2],"isPublished":false}`)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d (%s)", http.StatusOK, rr.Code, rr.Body.String())
+	}
+
+	items := decodeItems(t, serve(handler.GetItems, http.MethodGet, "/shop/items", ""))
+	if len(items) != 0 {
+		t.Fatalf("expected no published items, got %d", len(items))
+	}
+}
+
+func TestSetItemsPublishedRejectsInvalidBodies(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	for _, body := range []string{
+		`{"ids":[],"isPublished":true}`,
+		`{"ids":[1]}`,
+		`{"isPublished":true}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			rr := serve(handler.SetItemsPublished, http.MethodPatch, "/shop/items", body)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rr.Code)
+			}
+		})
+	}
+}
+
+func TestSetItemsPublishedRejectsOversizedBatch(t *testing.T) {
+	handler, _ := newTestHandler(t)
+
+	ids := make([]string, maxItemPublicationBatch+1)
+	for index := range ids {
+		ids[index] = strconv.Itoa(index + 1)
+	}
+
+	rr := serve(handler.SetItemsPublished, http.MethodPatch, "/shop/items",
+		`{"ids":[`+strings.Join(ids, ",")+`],"isPublished":true}`)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rr.Code)
 	}
 }

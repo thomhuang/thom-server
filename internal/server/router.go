@@ -42,6 +42,7 @@ func (app *App) routes() *http.ServeMux {
 	mux.HandleFunc("GET /shop/brands", shopHandler.GetBrands)
 	mux.HandleFunc("POST /shop/brands", app.auth.RequireAuth(shopHandler.CreateBrand))
 	mux.HandleFunc("POST /shop/items", app.auth.RequireAuth(shopHandler.CreateItem))
+	mux.HandleFunc("PATCH /shop/items", app.auth.RequireAuth(shopHandler.SetItemsPublished))
 	mux.HandleFunc("PATCH /shop/items/{id}", app.auth.RequireAuth(shopHandler.UpdateItem))
 	mux.HandleFunc("DELETE /shop/items/{id}", app.auth.RequireAuth(shopHandler.DeleteItem))
 	mux.HandleFunc("POST /shop/items/{id}/images/presign", app.auth.RequireAuth(shopHandler.PresignImageUpload))

@@ -20,6 +20,7 @@ func TestShopMutatingRoutesRequireAuth(t *testing.T) {
 		body   string
 	}{
 		{method: http.MethodPost, path: "/shop/items", body: `{}`},
+		{method: http.MethodPatch, path: "/shop/items", body: `{}`},
 		{method: http.MethodPatch, path: "/shop/items/1", body: `{}`},
 		{method: http.MethodDelete, path: "/shop/items/1"},
 		{method: http.MethodPost, path: "/shop/items/1/images/presign", body: `{}`},

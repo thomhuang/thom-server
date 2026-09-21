@@ -210,6 +210,15 @@ section only records durable gotchas; operator action items live in
   are dropped by `ensureShopItemColumns` via `data.DropColumns`. `GetItems`
   summaries include neither category nor measurements — only `GET /shop/items/{id}`
   does.
+- **Batch publish/unpublish (2026-09-20).** `PATCH /shop/items` (admin) takes
+  `{ "ids": [1, 2, ...], "isPublished": true|false }` and flips the flag for
+  every matching listing in one statement. Batches are capped at 100 ids; an
+  empty batch or a missing `isPublished` is a `400`. Unknown ids are ignored and
+  the response is `{ "updated": <count> }`, so a listing deleted after it was
+  selected is not an error. Saved drafts are already fully valid (create and
+  update run the same `isValidItem` check), so publishing does not re-validate.
+  The website admin list exposes this as per-card Select checkboxes plus
+  "Publish selected" / "Unpublish selected".
 - **Operator order notification.** The Stripe webhook sends a best-effort copy of
   every paid, non-oversold order to `ORDER_NOTIFICATION_EMAIL`. It is a plain
   address kept out of `wrangler.jsonc` and set per Worker (see the operator

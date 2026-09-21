@@ -207,6 +207,70 @@ func TestModelUpdateItemNoRecord(t *testing.T) {
 	}
 }
 
+func TestModelSetItemsPublishedPublishesBatch(t *testing.T) {
+	model := newTestModel(t)
+
+	updated, err := model.SetItemsPublished([]int{3}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated != 1 {
+		t.Fatalf("expected 1 updated row, got %d", updated)
+	}
+
+	item, err := model.GetItemByID(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !item.IsPublished {
+		t.Fatal("expected item 3 to be published")
+	}
+}
+
+func TestModelSetItemsPublishedUnpublishesBatch(t *testing.T) {
+	model := newTestModel(t)
+
+	updated, err := model.SetItemsPublished([]int{1, 2}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated != 2 {
+		t.Fatalf("expected 2 updated rows, got %d", updated)
+	}
+
+	published, err := model.GetItems(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(published) != 0 {
+		t.Fatalf("expected no published items, got %d", len(published))
+	}
+}
+
+func TestModelSetItemsPublishedIgnoresUnknownIDs(t *testing.T) {
+	model := newTestModel(t)
+
+	updated, err := model.SetItemsPublished([]int{3, 999}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated != 1 {
+		t.Fatalf("expected only the existing row to change, got %d", updated)
+	}
+}
+
+func TestModelSetItemsPublishedEmptyIsNoOp(t *testing.T) {
+	model := newTestModel(t)
+
+	updated, err := model.SetItemsPublished(nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated != 0 {
+		t.Fatalf("expected no rows to change, got %d", updated)
+	}
+}
+
 func TestModelDeleteItemReturnsImagesAndCascades(t *testing.T) {
 	model := newTestModel(t)
 

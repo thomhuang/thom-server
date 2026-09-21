@@ -140,6 +140,47 @@ func (h *Handler) DeleteItem(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// itemPublicationRequest is the body of a batch publish request. The same
+// route drives both publishing and unpublishing.
+type itemPublicationRequest struct {
+	IDs         []int `json:"ids"`
+	IsPublished *bool `json:"isPublished"`
+}
+
+// maxItemPublicationBatch caps one batch so a malformed request cannot expand
+// into an unbounded IN clause.
+const maxItemPublicationBatch = 100
+
+// SetItemsPublished publishes or unpublishes several listings at once. Unknown
+// ids are ignored, and the response reports how many rows matched.
+func (h *Handler) SetItemsPublished(w http.ResponseWriter, r *http.Request) {
+	var request itemPublicationRequest
+	if err := h.responder.DecodeJSON(w, r.Body, &request); err != nil {
+		h.infoLog.Printf("failed to decode shop item publication JSON: %v", err)
+		h.responder.BadRequest(w)
+		return
+	}
+
+	if request.IsPublished == nil || len(request.IDs) == 0 || len(request.IDs) > maxItemPublicationBatch {
+		h.responder.BadRequest(w)
+		return
+	}
+
+	updated, err := h.shop.SetItemsPublished(request.IDs, *request.IsPublished)
+	if err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+
+	h.infoLog.Printf("SET_ITEMS_PUBLISHED published=%t requested=%d updated=%d",
+		*request.IsPublished, len(request.IDs), updated)
+
+	if err = h.responder.WriteJSON(w, http.StatusOK, map[string]int{"updated": updated}, nil); err != nil {
+		h.responder.ServerError(w, err)
+		return
+	}
+}
+
 // normalizeAndValidateItem trims a listing, fills derived brand defaults, and
 // rejects one that is missing required fields. It writes the error response
 // itself and reports whether the item may be saved.
