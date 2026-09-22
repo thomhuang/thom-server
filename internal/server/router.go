@@ -3,12 +3,14 @@ package server
 import (
 	"net/http"
 
+	bloghttp "thom-server/internal/server/blog"
 	coffeehttp "thom-server/internal/server/coffee"
 	shophttp "thom-server/internal/server/shop"
 )
 
 func (app *App) routes() *http.ServeMux {
 	mux := http.NewServeMux()
+	blogHandler := bloghttp.New(app.blog, app.responder, app.infoLog)
 	coffeeHandler := coffeehttp.New(app.coffee, app.responder, app.infoLog)
 	shopHandler := shophttp.New(app.shop, app.imageStore, app.config.R2PublicBaseURL, app.responder, app.infoLog).
 		WithStripe(app.stripe, shophttp.StripeSettings{
@@ -22,6 +24,13 @@ func (app *App) routes() *http.ServeMux {
 		WithOrderNotifications(app.config.Email.NotificationEmail)
 
 	mux.HandleFunc("GET /ping", app.ping)
+
+	mux.HandleFunc("GET /blog", app.auth.OptionalAuth(blogHandler.GetPosts))
+	mux.HandleFunc("GET /blog/categories", blogHandler.GetCategories)
+	mux.HandleFunc("GET /blog/{id}", app.auth.OptionalAuth(blogHandler.GetPostByID))
+	mux.HandleFunc("POST /blog", app.auth.RequireAuth(blogHandler.CreatePost))
+	mux.HandleFunc("PATCH /blog/{id}", app.auth.RequireAuth(blogHandler.UpdatePost))
+	mux.HandleFunc("DELETE /blog/{id}", app.auth.RequireAuth(blogHandler.DeletePost))
 
 	mux.HandleFunc("POST /auth/login", app.requireAllowedOrigin(app.auth.Login))
 	mux.HandleFunc("POST /auth/logout", app.auth.RequireAuth(app.auth.Logout))

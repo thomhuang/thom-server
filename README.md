@@ -81,6 +81,7 @@ npx wrangler deploy -c wrangler.test.jsonc # test
 Public:
 
 - `GET /ping`
+- `GET /blog`, `GET /blog/{id}`, `GET /blog/categories` (admins also see drafts; `GET /blog?category=<id>` filters)
 - `GET /coffee`, `GET /coffee/roasters`, `GET /coffee/grinders`, `GET /coffee/{id}`
 - `GET /shop/items`, `GET /shop/items/{id}`, `GET /shop/brands` (admins also see drafts)
 - `GET /shop/orders/{sessionId}` (lookup by unguessable Stripe session id)
@@ -90,6 +91,7 @@ Public:
 Authenticated with the session cookie:
 
 - `GET /auth/me`, `POST /auth/logout`
+- `POST /blog`, `PATCH /blog/{id}`, `DELETE /blog/{id}`
 - `POST /coffee`, `PATCH /coffee/{id}`, `DELETE /coffee/{id}`
 - `POST /coffee/roasters`, `POST /coffee/grinders`
 - `POST /shop/items`, `PATCH /shop/items/{id}`, `DELETE /shop/items/{id}`

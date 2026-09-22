@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 
+	blogdata "thom-server/internal/blog"
 	coffeedata "thom-server/internal/coffee"
 	"thom-server/internal/mail"
 	"thom-server/internal/r2"
@@ -16,6 +17,7 @@ import (
 
 type App struct {
 	infoLog         *log.Logger
+	blog            *blogdata.Model
 	coffee          *coffeedata.Model
 	shop            *shopdata.Model
 	imageStore      shophttp.ImageStore
@@ -27,12 +29,13 @@ type App struct {
 	checkoutLimiter *rateLimiter
 }
 
-func New(errorLog, infoLog *log.Logger, coffeeModel *coffeedata.Model, shopModel *shopdata.Model, config Config, authState authhttp.StateStore) *App {
+func New(errorLog, infoLog *log.Logger, blogModel *blogdata.Model, coffeeModel *coffeedata.Model, shopModel *shopdata.Model, config Config, authState authhttp.StateStore) *App {
 	if infoLog == nil {
 		infoLog = log.New(io.Discard, "", 0)
 	}
 	app := &App{
 		infoLog:         infoLog,
+		blog:            blogModel,
 		coffee:          coffeeModel,
 		shop:            shopModel,
 		imageStore:      r2.New(config.R2),

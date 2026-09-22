@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"thom-server/internal/authstate"
+	"thom-server/internal/blog"
 	"thom-server/internal/coffee"
 	"thom-server/internal/server"
 	"thom-server/internal/shop"
@@ -34,6 +35,11 @@ func main() {
 		errorLog.Fatal(err)
 	}
 	defer appDB.Close()
+
+	blogModel := &blog.Model{DB: appDB}
+	if err := blogModel.EnsureSchema(); err != nil {
+		errorLog.Fatal(err)
+	}
 
 	coffeeModel := &coffee.Model{DB: appDB}
 	if err := coffeeModel.EnsureSchema(); err != nil {
@@ -75,6 +81,7 @@ func main() {
 	app := server.New(
 		errorLog,
 		infoLog,
+		blogModel,
 		coffeeModel,
 		shopModel,
 		config,

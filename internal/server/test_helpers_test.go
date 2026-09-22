@@ -8,6 +8,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"thom-server/internal/blog"
 	"thom-server/internal/coffee"
 	"thom-server/internal/shop"
 )
@@ -22,6 +23,7 @@ func newTestApp(t *testing.T) *App {
 	return New(
 		log.New(io.Discard, "", 0),
 		log.New(io.Discard, "", 0),
+		&blog.Model{DB: db},
 		&coffee.Model{DB: db},
 		&shop.Model{DB: db},
 		Config{
@@ -49,6 +51,11 @@ func newTestDB(t *testing.T) *sql.DB {
 
 	db.SetMaxOpenConns(1)
 	if _, err = db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatal(err)
+	}
+
+	blogModel := &blog.Model{DB: db}
+	if err = blogModel.EnsureSchema(); err != nil {
 		t.Fatal(err)
 	}
 
