@@ -237,6 +237,21 @@ section only records durable gotchas; operator action items live in
   dir are blocked. Workaround: `go test -c -o
   "$env:LOCALAPPDATA\Temp\opencode\<pkg>.exe" <pkg>` and run that exe directly.
 
+## Blog images (2026-09-22)
+
+Pasted blog-post images upload straight to R2, mirroring shop images, but a blog
+post does not exist yet while the author is writing it, so the cleanup model
+differs. `POST /blog/images/presign` (admin) validates the content type, mints a
+`blog/{32hex}.{ext}` key, presigns the PUT, and records the key in a
+`BlogUploads` table (`ObjectKey`, `CreatedAt` as unix seconds). Saving a post
+(`POST /blog`, `PATCH /blog/{id}`) extracts `blog/<hex>.<ext>` keys from the body
+and deletes them from `BlogUploads` ("commits" them). `RunBlogUploadSweeper`
+(24h TTL, hourly sweep, started in `cmd/server/main.go`) deletes expired
+uncommitted uploads from R2 and then from the table. The key format and the
+extraction regex both live in `internal/server/blog/images.go` and must stay in
+sync. Reuses the same `R2_BUCKET` and `R2_PUBLIC_BASE_URL` as shop, under a
+`blog/` key prefix, so the website CSP needs no change.
+
 ## Garment measurements reference (2026-09-18)
 
 Measurements are open-ended. `ShopItemMeasurements` stores one `(Label,

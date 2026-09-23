@@ -5,24 +5,35 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	blogdata "thom-server/internal/blog"
 	authhttp "thom-server/internal/server/auth"
 	"thom-server/internal/server/response"
 )
 
+// ImageStore is an interface so handler tests can run without R2 credentials.
+type ImageStore interface {
+	PresignPut(objectKey, contentType string, expires time.Duration) (string, error)
+	Delete(objectKey string) error
+}
+
 type Handler struct {
 	blog      *blogdata.Model
+	images    ImageStore
+	publicURL string
 	responder response.Responder
 	infoLog   *log.Logger
 }
 
-func New(model *blogdata.Model, responder response.Responder, infoLog *log.Logger) *Handler {
+func New(model *blogdata.Model, images ImageStore, publicURL string, responder response.Responder, infoLog *log.Logger) *Handler {
 	if infoLog == nil {
 		infoLog = log.New(io.Discard, "", 0)
 	}
 	return &Handler{
 		blog:      model,
+		images:    images,
+		publicURL: strings.TrimSuffix(strings.TrimSpace(publicURL), "/"),
 		responder: responder,
 		infoLog:   infoLog,
 	}
@@ -104,6 +115,8 @@ func (h *Handler) CreatePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.commitUploads(createdPost.Body)
+
 	h.infoLog.Printf("CREATE_POST id=%s title=%s", createdPost.ID, createdPost.Title)
 
 	if err = h.responder.WriteJSON(w, http.StatusCreated, createdPost, nil); err != nil {
@@ -139,6 +152,8 @@ func (h *Handler) UpdatePost(w http.ResponseWriter, r *http.Request) {
 	if h.responder.HandleDataError(w, err) {
 		return
 	}
+
+	h.commitUploads(updatedPost.Body)
 
 	h.infoLog.Printf("UPDATE_POST id=%d title=%s", id, updatedPost.Title)
 
@@ -186,4 +201,18 @@ func cacheHeaders(r *http.Request) http.Header {
 	}
 
 	return response.PublicCache()
+}
+
+// commitUploads removes pending uploads the post body now references, so the
+// sweeper does not delete them. It is best-effort: the post is already saved,
+// and a failed commit only risks the image being swept later.
+func (h *Handler) commitUploads(body string) {
+	keys := referencedObjectKeys(body)
+	if len(keys) == 0 {
+		return
+	}
+
+	if err := h.blog.DeleteUploads(keys); err != nil {
+		h.infoLog.Printf("failed to commit blog uploads: %v", err)
+	}
 }

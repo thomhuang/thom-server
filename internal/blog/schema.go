@@ -18,6 +18,11 @@ func (m *Model) EnsureSchema() error {
 			Published INTEGER NOT NULL DEFAULT 0,
 			CreatedAt TEXT NOT NULL DEFAULT (datetime('now')),
 			UpdatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+
+		CREATE TABLE IF NOT EXISTS BlogUploads (
+			ObjectKey TEXT PRIMARY KEY,
+			CreatedAt INTEGER NOT NULL
 		);`
 
 	if _, err := m.DB.Exec(stmt); err != nil {

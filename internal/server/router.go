@@ -10,7 +10,7 @@ import (
 
 func (app *App) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	blogHandler := bloghttp.New(app.blog, app.responder, app.infoLog)
+	blogHandler := bloghttp.New(app.blog, app.imageStore, app.config.R2PublicBaseURL, app.responder, app.infoLog)
 	coffeeHandler := coffeehttp.New(app.coffee, app.responder, app.infoLog)
 	shopHandler := shophttp.New(app.shop, app.imageStore, app.config.R2PublicBaseURL, app.responder, app.infoLog).
 		WithStripe(app.stripe, shophttp.StripeSettings{
@@ -31,6 +31,7 @@ func (app *App) routes() *http.ServeMux {
 	mux.HandleFunc("POST /blog", app.auth.RequireAuth(blogHandler.CreatePost))
 	mux.HandleFunc("PATCH /blog/{id}", app.auth.RequireAuth(blogHandler.UpdatePost))
 	mux.HandleFunc("DELETE /blog/{id}", app.auth.RequireAuth(blogHandler.DeletePost))
+	mux.HandleFunc("POST /blog/images/presign", app.auth.RequireAuth(blogHandler.PresignImageUpload))
 
 	mux.HandleFunc("POST /auth/login", app.requireAllowedOrigin(app.auth.Login))
 	mux.HandleFunc("POST /auth/logout", app.auth.RequireAuth(app.auth.Logout))

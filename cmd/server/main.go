@@ -95,6 +95,10 @@ func main() {
 	defer stopSweeper()
 	go app.RunReservationSweeper(sweeperCtx)
 
+	// Pasted post images that were never saved are reclaimed on the same timer,
+	// so an abandoned blog draft cannot leave objects in R2 forever.
+	go app.RunBlogUploadSweeper(sweeperCtx)
+
 	srv := &http.Server{
 		Addr:              *addr,
 		ErrorLog:          errorLog,
