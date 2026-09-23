@@ -197,7 +197,7 @@ const maxResponseSize = 32 << 20
 func (c *conn) run(ctx context.Context, query string, args []driver.NamedValue) (*result, error) {
 	params := make([]any, 0, len(args))
 	for _, arg := range args {
-		params = append(params, arg.Value)
+		params = append(params, paramValue(arg.Value))
 	}
 
 	body, err := json.Marshal(queryRequest{SQL: query, Params: params})
@@ -268,6 +268,21 @@ func (c *conn) run(ctx context.Context, query string, args []driver.NamedValue) 
 	}
 
 	return out, nil
+}
+
+// paramValue normalizes Go values D1 stores differently than SQLite would. A
+// bool is a valid driver.Value, but D1 persists it as the text "true"/"false",
+// which later fails to scan into an integer column, so send 1/0 instead.
+func paramValue(value any) any {
+	if boolean, ok := value.(bool); ok {
+		if boolean {
+			return int64(1)
+		}
+
+		return int64(0)
+	}
+
+	return value
 }
 
 func normalizeValue(value any) driver.Value {

@@ -126,6 +126,39 @@ func TestExecReturnsLastInsertIDAndChanges(t *testing.T) {
 	}
 }
 
+func TestExecSendsBooleansAsIntegers(t *testing.T) {
+	var params []any
+	db := newTestDB(t, func(w http.ResponseWriter, r *http.Request) {
+		var request queryRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		params = request.Params
+
+		fmt.Fprint(w, rawResponse(`{
+			"results": {"columns": [], "rows": []},
+			"success": true,
+			"meta": {"changes": 1, "last_row_id": 1, "rows_read": 0, "rows_written": 1}
+		}`))
+	})
+
+	// D1 stores a JSON true/false as text, which fails to scan into an integer
+	// column, so the driver must send 1/0.
+	if _, err := db.Exec("INSERT INTO BlogPosts (Published) VALUES (?)", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(params) != 1 || params[0] != float64(1) {
+		t.Fatalf("expected published param 1, got %#v", params)
+	}
+
+	if _, err := db.Exec("INSERT INTO BlogPosts (Published) VALUES (?)", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(params) != 1 || params[0] != float64(0) {
+		t.Fatalf("expected published param 0, got %#v", params)
+	}
+}
+
 func TestExecSurfacesD1Errors(t *testing.T) {
 	db := newTestDB(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
