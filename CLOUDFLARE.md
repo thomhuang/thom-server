@@ -280,8 +280,12 @@ failed send is not retried.
   (`AuthLoginFailures` / `AuthRevokedTokens`), so they survive restarts and sleep
   and are shared if the deployment ever scales past one instance. The in-memory
   store is only the fallback for runs without a database (tests).
-- The container sleeps after 10 minutes idle; the first request after that has a
-  cold start (usually 1–3 seconds). Adjust `sleepAfter` in `worker/index.js`.
+- The container sleeps after `sleepAfter` idle (`"1h"` here, up from the `10m`
+  default); the first request after that has a cold start. Adjust `sleepAfter`
+  in `worker/index.js`. Startup schema checks are gated behind a persisted
+  `schemaVersion` (`internal/server/schema.go`), so a warm start skips the DDL
+  and only pays two D1 round trips; bump that constant whenever a schema
+  changes.
 - Adopt `instance_type`/`max_instances` in `wrangler.jsonc` if you need more
   resources. `basic` is 1 GiB / 1/4 vCPU / 4 GB.
 

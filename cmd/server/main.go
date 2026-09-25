@@ -37,22 +37,11 @@ func main() {
 	defer appDB.Close()
 
 	blogModel := &blog.Model{DB: appDB}
-	if err := blogModel.EnsureSchema(); err != nil {
-		errorLog.Fatal(err)
-	}
-
 	coffeeModel := &coffee.Model{DB: appDB}
-	if err := coffeeModel.EnsureSchema(); err != nil {
-		errorLog.Fatal(err)
-	}
-
 	shopModel := &shop.Model{DB: appDB}
-	if err := shopModel.EnsureSchema(); err != nil {
-		errorLog.Fatal(err)
-	}
-
 	authState := &authstate.Model{DB: appDB}
-	if err := authState.EnsureSchema(); err != nil {
+
+	if err := server.EnsureSchema(appDB, blogModel, coffeeModel, shopModel, authState); err != nil {
 		errorLog.Fatal(err)
 	}
 
