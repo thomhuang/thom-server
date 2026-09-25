@@ -14,7 +14,11 @@ const envText = (value) =>
 
 export class ThomServer extends Container {
   defaultPort = 4000;
-  sleepAfter = "10m";
+  // Raised from the 10m default: a low-traffic site paid a cold start on nearly
+  // every request. 1h keeps the container warm across a browsing session; raise
+  // it further (or add a keep-warm cron) to eliminate cold starts entirely, at
+  // the cost of the instance staying resident.
+  sleepAfter = "1h";
   pingEndpoint = "localhost/ping";
 
   // Worker secrets and vars are passed to the container on start.
