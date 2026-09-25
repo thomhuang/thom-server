@@ -111,8 +111,8 @@ func TestPublicCacheHeaders(t *testing.T) {
 		got  http.Header
 		want string
 	}{
-		{name: "short public cache", got: PublicCache(), want: "public, max-age=30"},
-		{name: "long public cache", got: PublicCacheLong(), want: "public, max-age=300"},
+		{name: "short public cache", got: PublicCache(), want: "public, s-maxage=30, max-age=0"},
+		{name: "long public cache", got: PublicCacheLong(), want: "public, s-maxage=300, max-age=0"},
 	}
 
 	for _, tt := range tests {

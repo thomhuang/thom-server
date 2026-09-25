@@ -35,8 +35,12 @@ func PublicCacheLong() http.Header {
 }
 
 func publicCache(maxAge time.Duration) http.Header {
+	seconds := strconv.Itoa(int(maxAge / time.Second))
 	return http.Header{
-		"Cache-Control": {"public, max-age=" + strconv.Itoa(int(maxAge/time.Second))},
+		// s-maxage keeps the shared edge cache for the full TTL while max-age=0
+		// makes browsers revalidate on every load, so an admin's edit is visible
+		// immediately instead of after the TTL.
+		"Cache-Control": {"public, s-maxage=" + seconds + ", max-age=0"},
 	}
 }
 
