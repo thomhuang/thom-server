@@ -14,7 +14,7 @@ func (h *Handler) GetBrands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = h.responder.WriteJSON(w, http.StatusOK, brands, response.PublicCache()); err != nil {
+	if err = h.responder.WriteJSON(w, http.StatusOK, brands, response.PublicCacheLong()); err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}

@@ -16,7 +16,7 @@ func (h *Handler) GetRoasters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = h.responder.WriteJSON(w, http.StatusOK, roasters, response.PublicCache()); err != nil {
+	if err = h.responder.WriteJSON(w, http.StatusOK, roasters, response.PublicCacheLong()); err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}

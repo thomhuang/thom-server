@@ -66,7 +66,7 @@ func (h *Handler) GetCategories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = h.responder.WriteJSON(w, http.StatusOK, categories, response.PublicCache()); err != nil {
+	if err = h.responder.WriteJSON(w, http.StatusOK, categories, response.PublicCacheLong()); err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}
@@ -200,7 +200,7 @@ func cacheHeaders(r *http.Request) http.Header {
 		return response.NoStore()
 	}
 
-	return response.PublicCache()
+	return response.PublicCacheLong()
 }
 
 // commitUploads removes pending uploads the post body now references, so the

@@ -13,15 +13,30 @@ import (
 
 const maxJSONBodySize = 1 << 20
 
-// publicCacheMaxAge bounds how long a shared cache may serve an anonymous public
-// response. It is short so price and stock staleness stays small.
+// publicCacheMaxAge bounds how long a shared cache may serve a public response
+// whose price or stock can change at any time (shop listings).
 const publicCacheMaxAge = 30 * time.Second
+
+// publicCacheLongMaxAge bounds how long a shared cache may serve a public
+// response that changes only when an admin edits it (coffee journal, blog
+// posts, brands, categories), so it can survive the gaps between visitors.
+const publicCacheLongMaxAge = 5 * time.Minute
 
 // PublicCache returns the Cache-Control header for a shared-cacheable public
 // GET response.
 func PublicCache() http.Header {
+	return publicCache(publicCacheMaxAge)
+}
+
+// PublicCacheLong returns the Cache-Control header for a public GET response
+// that changes only on admin edits and may be shared longer.
+func PublicCacheLong() http.Header {
+	return publicCache(publicCacheLongMaxAge)
+}
+
+func publicCache(maxAge time.Duration) http.Header {
 	return http.Header{
-		"Cache-Control": {"public, max-age=" + strconv.Itoa(int(publicCacheMaxAge/time.Second))},
+		"Cache-Control": {"public, max-age=" + strconv.Itoa(int(maxAge/time.Second))},
 	}
 }
 

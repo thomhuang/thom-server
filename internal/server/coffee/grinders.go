@@ -16,7 +16,7 @@ func (h *Handler) GetGrinders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = h.responder.WriteJSON(w, http.StatusOK, grinders, response.PublicCache()); err != nil {
+	if err = h.responder.WriteJSON(w, http.StatusOK, grinders, response.PublicCacheLong()); err != nil {
 		h.responder.ServerError(w, err)
 		return
 	}

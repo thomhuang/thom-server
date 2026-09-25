@@ -30,7 +30,9 @@ dated note when something changes.
       puts `release` back in the build pipeline.) (2026-09-21: the stock-hold,
       sweep, 409, and release-hold changes shipped with a manual
       `npx wrangler deploy`; promote `main` → `release` to keep the build
-      pipeline current.)
+      pipeline current.) (2026-09-25: cold-start latency work — `sleepAfter`
+      1h, schema-version gate, 5m TTL for coffee/blog/brands/categories,
+      `/blog` edge-cache — committed on `main`; promote/deploy to ship.)
 - [x] Verify the Stripe webhook endpoint (`/shop/webhooks/stripe`) subscribes
       to `checkout.session.completed` in both live and test mode with the
       matching signing secret. (2026-09-19: sandbox test-mode endpoints for

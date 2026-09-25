@@ -89,7 +89,7 @@ func TestErrorHelpers(t *testing.T) {
 		},
 	}
 
-		for _, tt := range tests {
+	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
 
@@ -100,6 +100,25 @@ func TestErrorHelpers(t *testing.T) {
 			}
 			if !strings.Contains(rr.Body.String(), http.StatusText(tt.status)) {
 				t.Fatalf("expected body to contain status text %q, got %q", http.StatusText(tt.status), rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestPublicCacheHeaders(t *testing.T) {
+	tests := []struct {
+		name string
+		got  http.Header
+		want string
+	}{
+		{name: "short public cache", got: PublicCache(), want: "public, max-age=30"},
+		{name: "long public cache", got: PublicCacheLong(), want: "public, max-age=300"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.got.Get("Cache-Control"); got != tt.want {
+				t.Fatalf("Cache-Control = %q, want %q", got, tt.want)
 			}
 		})
 	}
