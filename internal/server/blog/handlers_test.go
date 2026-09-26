@@ -2,7 +2,6 @@ package blog
 
 import (
 	"database/sql"
-	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -79,15 +78,4 @@ func newTestHandler(t *testing.T) (*Handler, *fakeImageStore) {
 		response.Responder{ErrorLog: log.New(io.Discard, "", 0)},
 		log.New(io.Discard, "", 0),
 	), images
-}
-
-func decodePost(t *testing.T, rr *httptest.ResponseRecorder) blogdata.Post {
-	t.Helper()
-
-	var post blogdata.Post
-	if err := json.Unmarshal(rr.Body.Bytes(), &post); err != nil {
-		t.Fatal(err)
-	}
-
-	return post
 }

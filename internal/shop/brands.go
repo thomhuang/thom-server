@@ -73,25 +73,6 @@ func (m *Model) upsertBrand(brand *Brand) (*Brand, error) {
 	return createdBrand, nil
 }
 
-func (m *Model) GetBrandByName(name string) (*Brand, error) {
-	return getBrandByName(m.DB, name)
-}
-
-func getBrandByName(q querier, name string) (*Brand, error) {
-	stmt := `
-		SELECT id, Brand, CreatedAt
-		FROM ShopBrands
-		WHERE Brand = ? COLLATE NOCASE`
-
-	brand := &Brand{}
-	err := q.QueryRow(stmt, name).Scan(&brand.ID, &brand.Brand, &brand.CreatedAt)
-	if err != nil {
-		return nil, data.NoRecord(err)
-	}
-
-	return brand, nil
-}
-
 func (m *Model) GetBrandByID(id string) (*Brand, error) {
 	return getBrandByID(m.DB, id)
 }

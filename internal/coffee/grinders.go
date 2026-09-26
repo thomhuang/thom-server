@@ -88,10 +88,6 @@ func (m *Model) upsertGrinderUncached(grinder *Grinder) (*Grinder, error) {
 	return getGrinderByID(m.DB, grinder.ID)
 }
 
-func (m *Model) GetGrinderByName(name string) (*Grinder, error) {
-	return getGrinderByName(m.DB, name)
-}
-
 func getGrinderByName(q querier, name string) (*Grinder, error) {
 	stmt := `
 		SELECT id, Grinder, CreatedAt
