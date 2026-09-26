@@ -2,6 +2,7 @@ package coffee
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -32,7 +33,7 @@ type coffeeEntryPatch struct {
 	RoastLevel       *string  `json:"roastLevel"`
 	Notes            *string  `json:"notes"`
 	TastingNotes     *string  `json:"tastingNotes"`
-	Rating           *int     `json:"rating"`
+	Rating           *float64 `json:"rating"`
 }
 
 // validCoffeeEntryPatch requires a roaster or grinder to be patched by both its
@@ -194,8 +195,9 @@ func isValidCoffeeEntry(entry *coffeedata.Entry) error {
 		return fmt.Errorf("grindSetting must be non-negative, got %.1f", entry.GrindSetting)
 	}
 
-	if entry.Rating < 0 || entry.Rating > 5 {
-		return fmt.Errorf("rating must be 0-5, got %d", entry.Rating)
+	if entry.Rating < 0 || entry.Rating > 5 ||
+		math.Trunc(entry.Rating*2) != entry.Rating*2 {
+		return fmt.Errorf("rating must be 0-5 in half-star increments, got %g", entry.Rating)
 	}
 
 	return nil

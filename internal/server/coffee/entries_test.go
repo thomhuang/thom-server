@@ -243,6 +243,20 @@ func TestCreateCoffeeEntryRejectsInvalidPayload(t *testing.T) {
 				"rating": 6
 			}`,
 		},
+		{
+			name: "rating off the half-star grid",
+			body: `{
+				"date": "2026-05-21",
+				"coffeeName": "Colombia Test Lot",
+				"roaster": "Shoebox",
+				"brewMethod": "kalita-wave",
+				"ratio": "1:15",
+				"grinder": "comandante-c40",
+				"grindSetting": 24,
+				"notes": "red fruit and caramel",
+				"rating": 3.3
+			}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -266,7 +280,7 @@ func TestUpdateCoffeeEntry(t *testing.T) {
 		"origin": "Nyeri, Kenya",
 		"coffeeVarietal": "SL28",
 		"processingMethod": "Washed",
-		"rating": 3
+		"rating": 3.5
 	}`))
 	req.SetPathValue("id", "1")
 	rr := httptest.NewRecorder()
@@ -287,8 +301,8 @@ func TestUpdateCoffeeEntry(t *testing.T) {
 	if entry.CoffeeName != "Kenya Test Lot" {
 		t.Fatalf("expected updated coffee name, got %q", entry.CoffeeName)
 	}
-	if entry.Rating != 3 {
-		t.Fatalf("expected updated rating 3, got %d", entry.Rating)
+	if entry.Rating != 3.5 {
+		t.Fatalf("expected updated rating 3.5, got %g", entry.Rating)
 	}
 	if entry.Roaster != "Shoebox" {
 		t.Fatalf("expected unchanged roaster Shoebox, got %q", entry.Roaster)

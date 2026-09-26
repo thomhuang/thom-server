@@ -33,7 +33,7 @@ type Entry struct {
 	RoastLevel       string  `json:"roastLevel"`
 	Notes            string  `json:"notes"`
 	TastingNotes     string  `json:"tastingNotes,omitempty"`
-	Rating           int     `json:"rating"`
+	Rating           float64 `json:"rating"`
 	CreatedAt        string  `json:"createdAt,omitempty"`
 }
 
