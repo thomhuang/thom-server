@@ -2,7 +2,7 @@
 .env
 .env*
 !.env.example
-!.env.op
+!.env.bw
 .dev.vars
 .dev.vars.*
 !.dev.vars.example

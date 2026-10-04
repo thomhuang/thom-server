@@ -78,7 +78,7 @@ This is a small Go 1.25 HTTP API server. The executable entrypoint lives in `cmd
 
 - `go run ./tools/bcryptgen`: hash an admin password for `ADMIN_PASSWORD_HASH` (reads the password from stdin).
 
-For local authenticated routes, keep the **non-secret** values in `.env.local` (copy `.env.example`) and run the server with `scripts/dev-op.ps1` (PowerShell) or the portable `op run --env-file=.env.op -- go run ./cmd/server`, which injects secrets from 1Password (see `README.md`). `go run ./cmd/server` loads `.env.local` before reading configuration, while existing shell or container variables take precedence. The server uses Cloudflare D1 and refuses to start unless `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, and `CF_API_TOKEN` are all set — there is no local SQLite fallback. Because `modernc.org/sqlite` is a pure-Go driver, the in-memory unit tests need no C toolchain; the D1 path does not either.
+For local authenticated routes, keep the **non-secret** values in `.env.local` (copy `.env.example`) and run the server with `scripts/dev-bw.ps1` (PowerShell), which resolves secrets from Bitwarden (see `README.md`). `go run ./cmd/server` loads `.env.local` before reading configuration, while existing shell or container variables take precedence. The server uses Cloudflare D1 and refuses to start unless `D1_ACCOUNT_ID`, `D1_DATABASE_ID`, and `CF_API_TOKEN` are all set — there is no local SQLite fallback. Because `modernc.org/sqlite` is a pure-Go driver, the in-memory unit tests need no C toolchain; the D1 path does not either.
 
 ## Coding Style & Naming Conventions
 
@@ -108,7 +108,7 @@ Do not commit secrets, real `.env.local`/`.dev.vars` values, JWT secrets, or pro
 
 **Local secret files.** `.env*` and `.dev.vars*` (except the `.example` files) are gitignored and denied to the `read` tool via global OpenCode permissions. Do not work around that with `grep` or shell commands — a `grep '^CF_API_TOKEN=.+' .env*` prints the secret into the transcript. Read the `.example` files for the shape of the config instead.
 
-**Local secrets use 1Password.** `.env.op` is a committed, non-secret list of `op://` references; `scripts/dev-op.ps1` runs `op run`, which resolves them into the server process only. The desktop app's developer integration plus Windows Hello is the human-unlock boundary — keep auto-lock short. This is a guardrail, not OS-level isolation: while the vault is unlocked, `shell` can still reach anything readable. `.env.local` holds only non-secrets. Never print resolved values into the transcript.
+**Local secrets use Bitwarden.** The committed `.env.bw` maps each config variable to a Bitwarden login-item title; `scripts/dev-bw.ps1` resolves each by exact item name or id and injects the values into the server process only, restoring your environment afterward. Unlocking the vault (master password, or Windows Hello via the desktop app's biometric unlock) is the human-unlock boundary — keep the session short. This is a guardrail, not OS-level isolation: while `BW_SESSION` is set, `shell` can reach the secrets too. `.env.local` holds only non-secrets. Never print resolved values into the transcript.
 
 **Wrangler loads `.env`/`.env.local` from its working directory.** A `CF_API_TOKEN` there is picked up as wrangler's own API token, shadowing the OAuth login and causing `403 No access to the specified resource` on `wrangler secret`/`deploy`. Run wrangler from a directory without those files, or unset the variable for the command.
 

@@ -102,45 +102,46 @@ Authenticated with the session cookie:
 
 ```sh
 cp .env.example .env.local   # non-secret config only
-.\scripts\dev-op.ps1         # 1Password-injected secrets + go run, API on :4000
-# or, on any shell with the 1Password CLI installed:
-op run --env-file=.env.op -- go run ./cmd/server
+.\scripts\dev-bw.ps1         # Bitwarden-injected secrets + go run, API on :4000
 ```
 
 `go run ./cmd/server` loads `.env.local` before reading the environment, and
 existing shell or container variables take precedence. The server has no local
 database: `.env.example` points `D1_DATABASE_ID` and the R2 values at the
 **test** environment (`wrangler.test.jsonc`). Keep the **non-secret** values in
-`.env.local` and run the server through `scripts/dev-op.ps1`, which resolves the
-secrets from 1Password. The server refuses to start without D1 configured.
+`.env.local` and run the server through `scripts/dev-bw.ps1`, which resolves the
+secrets from Bitwarden. The server refuses to start without D1 configured.
 
-### Secrets (1Password)
+### Secrets (Bitwarden)
 
-Secrets are referenced, never stored in the repo: the committed `.env.op` holds
-`op://` paths for `CF_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
-`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `EMAIL_API_TOKEN`,
-`ADMIN_PASSWORD_HASH`, and `JWT_SECRET`. `scripts/dev-op.ps1` runs `op run`, so
-1Password resolves those fields and injects them into the server process only —
-nothing is written to disk and your shell is left untouched.
+Secrets are referenced, never stored in the repo: the committed `.env.bw` holds
+the Bitwarden login-item name (or id) for each variable. `scripts/dev-bw.ps1`
+matches each item by exact name or id, so the values are injected into the
+server process only — nothing is written to disk and your shell is left
+untouched. Exact matching keeps a dev item apart from a similarly named
+production (`PRD …`) item.
 
-One-time setup: install the desktop app and CLI (desktop first), then open a new
-shell so `op` is on `PATH`:
+One-time setup: install the CLI and open a new shell so `bw` is on `PATH`:
 
 ```powershell
-winget install --id AgileBits.1Password --accept-package-agreements --accept-source-agreements
-winget install --id AgileBits.1Password.CLI --accept-package-agreements --accept-source-agreements
+winget install -e --id Bitwarden.CLI
 ```
 
-In the desktop app, enable **Settings → Developer → Integrate with 1Password
-CLI** and Windows Hello, and set a short auto-lock. Then create a vault
-`thom-dev` with one LOGIN item per secret above, titled after the variable, with
-the value in the item's `password` field. `.env.op` maps each variable to
-`op://thom-dev/<item title>/password`.
+Log in once, then keep one login item per variable in your vault with the value
+in the item's `password` field:
+
+```powershell
+bw login
+```
+
+`.env.bw` maps each variable to an item title; edit it to match the item titles
+in your vault. The script unlocks the vault if needed — master password, or
+Windows Hello when the Bitwarden desktop app's biometric unlock is enabled.
 
 Run the server with:
 
 ```powershell
-.\scripts\dev-op.ps1       # op run + go run ./cmd/server
+.\scripts\dev-bw.ps1       # bw get + go run ./cmd/server
 ```
 
 To run the real container locally instead, use the test Wrangler config so its
