@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.25 AS build
+FROM golang:1.27 AS build
 
 # Set destination for COPY
 WORKDIR /app
@@ -10,8 +10,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 # Install the vulnerability scanner in its own layer so a source change does
-# not force a re-download. Pinned to the newest release that still supports the
-# Go toolchain in this base image (v1.8.0 requires Go 1.26).
+# not force a re-download. Pinned for reproducible builds.
 RUN go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 
 # copy the source code, .dockerignore handling irrelevant files
