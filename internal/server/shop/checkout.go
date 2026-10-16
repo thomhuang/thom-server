@@ -6,24 +6,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	shopdata "thom-server/internal/shop"
 )
-
-// reservationHold is how long a checkout keeps its stock reservation before an
-// abandoned session releases it. It is deliberately shorter than the Stripe
-// session lifetime so the item frees up quickly; a buyer who pays after their
-// hold lapsed is caught by the oversold refund path.
-const reservationHold = 10 * time.Minute
-
-// reservationExpiryBuffer pads the Stripe session expiry past its 30-minute
-// minimum so clock skew and request latency never push it below the floor.
-const reservationExpiryBuffer = 2 * time.Minute
-
-// sessionLifetime is how long the Stripe Checkout page stays payable. Stripe
-// requires at least 30 minutes, so it is also the ceiling on the reservation.
-const sessionLifetime = 30*time.Minute + reservationExpiryBuffer
 
 // ErrStripeNotConfigured is returned when checkout is requested without an API key.
 var ErrStripeNotConfigured = errors.New("shop: stripe is not configured")
@@ -62,7 +47,6 @@ type CheckoutParams struct {
 	CancelURL     string
 	ShippingCents int
 	TaxEnabled    bool
-	ExpiresAt     int64
 }
 
 // CheckoutSession is the part of a Stripe session the server needs to keep.
@@ -87,25 +71,24 @@ type checkoutResponse struct {
 	URL       string `json:"url"`
 }
 
-// checkoutConflict explains a 409 so the storefront can tell a buyer whether an
-// item is temporarily held by another checkout or actually sold out.
-// ReservedUntil is set only when a pending reservation currently holds the item.
+// checkoutConflict explains a 409 so the storefront can tell a buyer what is
+// available. Stock is only decremented when a payment lands, so the reported
+// count reflects paid inventory, never an in-progress checkout.
 type checkoutConflict struct {
-	Error         string `json:"error"`
-	ItemID        string `json:"itemId"`
-	Title         string `json:"title"`
-	Available     int    `json:"available"`
-	ReservedUntil int64  `json:"reservedUntil,omitempty"`
+	Error     string `json:"error"`
+	ItemID    string `json:"itemId"`
+	Title     string `json:"title"`
+	Available int    `json:"available"`
 }
 
-// checkoutLine is a validated request line ready to reserve stock for.
+// checkoutLine is a validated request line ready to load a listing for.
 type checkoutLine struct {
 	itemID   int
 	quantity int
 }
 
-// reservedItem pairs a loaded listing with the quantity reserved from it.
-type reservedItem struct {
+// checkoutItem pairs a loaded listing with the quantity the buyer requested.
+type checkoutItem struct {
 	item     *shopdata.Item
 	quantity int
 }
@@ -119,9 +102,10 @@ func (h *Handler) WithStripe(client StripeClient, settings StripeSettings) *Hand
 	return h
 }
 
-// Checkout creates a Checkout Session for one or more listings and reserves
-// their stock for the hold window, so two buyers cannot pay for the same last
-// item. The prices are read from the database, never from the request.
+// Checkout creates a Checkout Session for one or more listings. Stock is not
+// taken here: it is decremented only when the payment webhook arrives, so an
+// abandoned checkout never blocks a listing. Prices are read from the database,
+// never from the request.
 func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 	if h.stripe == nil {
 		h.infoLog.Printf("checkout requested but Stripe is not configured")
@@ -134,26 +118,22 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reserved, ok := h.reserveCheckoutStock(w, lines)
+	items, ok := h.loadCheckoutItems(w, lines)
 	if !ok {
 		return
 	}
 
-	now := time.Now()
-	sessionExpiresAt := now.Add(sessionLifetime)
-	holdExpiresAt := now.Add(reservationHold)
-
-	session, ok := h.createCheckoutSession(w, r, reserved, sessionExpiresAt)
+	session, ok := h.createCheckoutSession(w, r, items)
 	if !ok {
 		return
 	}
 
-	order, ok := h.recordPendingOrder(w, r, session, reserved, holdExpiresAt)
+	order, ok := h.recordPendingOrder(w, r, session, items)
 	if !ok {
 		return
 	}
 
-	h.infoLog.Printf("CREATE_CHECKOUT session=%s items=%d order=%s", session.ID, len(reserved), order.ID)
+	h.infoLog.Printf("CREATE_CHECKOUT session=%s items=%d order=%s", session.ID, len(items), order.ID)
 
 	err := h.responder.WriteJSON(w, http.StatusCreated, checkoutResponse{
 		SessionID: session.ID,
@@ -215,60 +195,43 @@ func (h *Handler) decodeCheckoutRequest(w http.ResponseWriter, r *http.Request) 
 	return lines, true
 }
 
-// reserveCheckoutStock frees stale holds, loads each listing, and takes its
-// stock for the requested quantity. The reservation is all-or-nothing: if any
-// line fails, the ones already reserved are restored. It writes the error
-// response itself.
-func (h *Handler) reserveCheckoutStock(w http.ResponseWriter, lines []checkoutLine) ([]*reservedItem, bool) {
-	// Expired holds are freed lazily here so abandoned reservations never
-	// strand stock even when the expired webhook is missed.
-	if err := h.shop.ReleaseExpiredReservations(time.Now().Unix()); err != nil {
-		h.infoLog.Printf("failed to release expired reservations: %v", err)
-	}
-
-	reserved := make([]*reservedItem, 0, len(lines))
+// loadCheckoutItems verifies each requested listing is published and has enough
+// stock, without taking any. Stock is decremented only on payment, so this read
+// never holds a listing for an abandoned checkout. It writes the error response
+// itself.
+func (h *Handler) loadCheckoutItems(w http.ResponseWriter, lines []checkoutLine) ([]*checkoutItem, bool) {
+	items := make([]*checkoutItem, 0, len(lines))
 	for _, line := range lines {
 		item, err := h.shop.GetItemByID(line.itemID)
 		if h.responder.HandleDataError(w, err) {
-			h.restoreReservations(reserved)
 			return nil, false
 		}
 		if !item.IsPublished {
 			h.responder.NotFound(w)
-			h.restoreReservations(reserved)
 			return nil, false
 		}
-
-		ok, err := h.shop.DecrementStock(item.ID, line.quantity)
-		if err != nil {
-			h.infoLog.Printf("failed to reserve stock for item %s: %v", item.ID, err)
-			h.responder.ServerError(w, err)
-			h.restoreReservations(reserved)
-			return nil, false
-		}
-		if !ok {
+		if item.Stock < line.quantity {
 			h.infoLog.Printf("checkout for item %d exceeds available stock", line.itemID)
 			h.writeStockConflict(w, item)
-			h.restoreReservations(reserved)
 			return nil, false
 		}
 
-		reserved = append(reserved, &reservedItem{item: item, quantity: line.quantity})
+		items = append(items, &checkoutItem{item: item, quantity: line.quantity})
 	}
 
-	return reserved, true
+	return items, true
 }
 
-// createCheckoutSession asks Stripe for a session and restores the reservation
-// if that fails.
-func (h *Handler) createCheckoutSession(w http.ResponseWriter, r *http.Request, reserved []*reservedItem, expiresAt time.Time) (*CheckoutSession, bool) {
-	currency := reserved[0].item.Currency
-	lines := make([]CheckoutLine, 0, len(reserved))
-	for _, res := range reserved {
+// createCheckoutSession asks Stripe for a session. Stock is untouched on
+// failure, so there is nothing to roll back.
+func (h *Handler) createCheckoutSession(w http.ResponseWriter, r *http.Request, items []*checkoutItem) (*CheckoutSession, bool) {
+	currency := items[0].item.Currency
+	lines := make([]CheckoutLine, 0, len(items))
+	for _, ci := range items {
 		lines = append(lines, CheckoutLine{
-			Title:          res.item.Title,
-			UnitPriceCents: res.item.PriceCents,
-			Quantity:       int64(res.quantity),
+			Title:          ci.item.Title,
+			UnitPriceCents: ci.item.PriceCents,
+			Quantity:       int64(ci.quantity),
 		})
 	}
 
@@ -279,11 +242,9 @@ func (h *Handler) createCheckoutSession(w http.ResponseWriter, r *http.Request, 
 		CancelURL:     h.stripeSettings.CancelURL,
 		ShippingCents: h.stripeSettings.ShippingCents,
 		TaxEnabled:    h.stripeSettings.TaxEnabled,
-		ExpiresAt:     expiresAt.Unix(),
 	})
 	if err != nil {
 		h.infoLog.Printf("failed to create checkout session: %v", err)
-		h.restoreReservations(reserved)
 		h.responder.ServerError(w, err)
 		return nil, false
 	}
@@ -291,30 +252,27 @@ func (h *Handler) createCheckoutSession(w http.ResponseWriter, r *http.Request, 
 	return session, true
 }
 
-// recordPendingOrder persists the reservation as an order. On failure it
-// restores the reservation and expires the session so a checkout that could
-// not be recorded can never be paid without the reservation.
-func (h *Handler) recordPendingOrder(w http.ResponseWriter, r *http.Request, session *CheckoutSession, reserved []*reservedItem, expiresAt time.Time) (*shopdata.Order, bool) {
-	currency := reserved[0].item.Currency
-	lines := make([]*shopdata.OrderLine, 0, len(reserved))
-	for _, res := range reserved {
+// recordPendingOrder persists the checkout as a pending order. On failure it
+// expires the session so a checkout that could not be recorded can never be
+// paid without an order row.
+func (h *Handler) recordPendingOrder(w http.ResponseWriter, r *http.Request, session *CheckoutSession, items []*checkoutItem) (*shopdata.Order, bool) {
+	currency := items[0].item.Currency
+	lines := make([]*shopdata.OrderLine, 0, len(items))
+	for _, ci := range items {
 		lines = append(lines, &shopdata.OrderLine{
-			ItemID:         res.item.ID,
-			Title:          res.item.Title,
-			UnitPriceCents: res.item.PriceCents,
-			Quantity:       res.quantity,
+			ItemID:         ci.item.ID,
+			Title:          ci.item.Title,
+			UnitPriceCents: ci.item.PriceCents,
+			Quantity:       ci.quantity,
 		})
 	}
 
 	order, err := h.shop.InsertPendingOrder(session.ID, &shopdata.Order{
-		Currency:      currency,
-		StockReserved: 1,
-		ExpiresAt:     expiresAt.Unix(),
-		Lines:         lines,
+		Currency: currency,
+		Lines:    lines,
 	})
 	if err != nil {
 		h.infoLog.Printf("failed to record order for session %s: %v", session.ID, err)
-		h.restoreReservations(reserved)
 		if expireErr := h.stripe.ExpireCheckoutSession(r.Context(), session.ID); expireErr != nil {
 			h.infoLog.Printf("failed to expire session %s: %v", session.ID, expireErr)
 		}
@@ -325,38 +283,15 @@ func (h *Handler) recordPendingOrder(w http.ResponseWriter, r *http.Request, ses
 	return order, true
 }
 
-// restoreReservations best-effort restores the stock several reserved items
-// held after a failed checkout.
-func (h *Handler) restoreReservations(reserved []*reservedItem) {
-	for _, res := range reserved {
-		h.restoreReservation(res.item.ID, res.quantity)
-	}
-}
-
-// restoreReservation best-effort restores the stock a failed checkout reserved.
-func (h *Handler) restoreReservation(itemID string, quantity int) {
-	if err := h.shop.RestoreStock(itemID, quantity); err != nil {
-		h.infoLog.Printf("failed to restore stock for item %s: %v", itemID, err)
-	}
-}
-
-// writeStockConflict writes the 409 body for a line whose stock could not be
-// reserved. It names the item and, when a pending reservation is holding it,
-// reports when that hold ends so the storefront can offer a retry rather than
-// calling the item sold out.
+// writeStockConflict writes the 409 body for a line whose stock could not cover
+// the requested quantity. Because stock is only decremented on payment, the
+// reported count is the item's true paid inventory.
 func (h *Handler) writeStockConflict(w http.ResponseWriter, item *shopdata.Item) {
 	conflict := checkoutConflict{
 		Error:     "insufficient_stock",
 		ItemID:    item.ID,
 		Title:     item.Title,
 		Available: item.Stock,
-	}
-
-	expiresAt, held, err := h.shop.ReservationHoldingItem(item.ID, time.Now().Unix())
-	if err != nil {
-		h.infoLog.Printf("failed to look up the reservation holding item %s: %v", item.ID, err)
-	} else if held {
-		conflict.ReservedUntil = expiresAt
 	}
 
 	if err := h.responder.WriteJSON(w, http.StatusConflict, conflict, nil); err != nil {

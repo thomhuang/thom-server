@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"testing"
-	"time"
 
 	shopdata "thom-server/internal/shop"
 )
@@ -47,7 +46,7 @@ func TestCheckoutUsesDatabasePriceAndRecordsPendingOrder(t *testing.T) {
 	}
 }
 
-func TestCheckoutReservesMultipleItemsInOneOrder(t *testing.T) {
+func TestCheckoutRecordsMultipleItemsWithoutDecrementing(t *testing.T) {
 	handler, _ := newTestHandler(t)
 	stripeClient := &fakeStripeClient{}
 	handler.WithStripe(stripeClient, StripeSettings{
@@ -78,6 +77,7 @@ func TestCheckoutReservesMultipleItemsInOneOrder(t *testing.T) {
 		t.Fatalf("order lines = %d, want 2", len(order.Lines))
 	}
 
+	// Stock is not taken until the payment webhook arrives.
 	mug, err := handler.shop.GetItemByID(1)
 	if err != nil {
 		t.Fatal(err)
@@ -86,17 +86,17 @@ func TestCheckoutReservesMultipleItemsInOneOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mug.Stock != 3 || beans.Stock != 7 {
-		t.Fatalf("stock = mug %d / beans %d, want 3 / 7", mug.Stock, beans.Stock)
+	if mug.Stock != 5 || beans.Stock != 10 {
+		t.Fatalf("stock = mug %d / beans %d, want 5 / 10 untouched", mug.Stock, beans.Stock)
 	}
 }
 
-func TestCheckoutRestoresAllStockWhenOneItemIsUnavailable(t *testing.T) {
+func TestCheckoutLeavesStockUntouchedWhenAnItemIsUnavailable(t *testing.T) {
 	handler, _ := newTestHandler(t)
 	handler.WithStripe(&fakeStripeClient{}, StripeSettings{})
 
-	// Item 1 has stock 5; requesting 4 for it and 1 for the draft item (3)
-	// must restore the 4 already reserved from item 1.
+	// Item 1 has stock 5; requesting it alongside the draft item (3) must fail
+	// without touching item 1's stock, because nothing was taken yet.
 	rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout",
 		`{"items":[{"itemId":"1","quantity":4},{"itemId":"3","quantity":1}]}`)
 	if rr.Code != http.StatusNotFound {
@@ -108,7 +108,7 @@ func TestCheckoutRestoresAllStockWhenOneItemIsUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if item.Stock != 5 {
-		t.Fatalf("stock = %d, want 5 restored after the failed checkout", item.Stock)
+		t.Fatalf("stock = %d, want 5 untouched after the failed checkout", item.Stock)
 	}
 }
 
@@ -148,9 +148,6 @@ func TestCheckoutRejectsInsufficientStock(t *testing.T) {
 	if conflict.Error != "insufficient_stock" || conflict.ItemID != "1" || conflict.Available != 5 {
 		t.Fatalf("conflict = %+v, want the sold-out item with its available stock", conflict)
 	}
-	if conflict.ReservedUntil != 0 {
-		t.Fatalf("reservedUntil = %d, want 0 when no reservation holds the item", conflict.ReservedUntil)
-	}
 }
 
 func TestCheckoutRejectsNonPositiveQuantity(t *testing.T) {
@@ -163,91 +160,7 @@ func TestCheckoutRejectsNonPositiveQuantity(t *testing.T) {
 	}
 }
 
-func TestCheckoutReservesStockAndSetsSessionExpiry(t *testing.T) {
-	handler, _ := newTestHandler(t)
-	stripeClient := &fakeStripeClient{}
-	handler.WithStripe(stripeClient, StripeSettings{})
-
-	before := time.Now().Unix()
-
-	rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":2}`)
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d (%s)", rr.Code, http.StatusCreated, rr.Body.String())
-	}
-
-	// Stock is reserved immediately, not when the payment webhook arrives.
-	item, err := handler.shop.GetItemByID(1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if item.Stock != 3 {
-		t.Fatalf("stock = %d, want 3 after reserving 2 of 5", item.Stock)
-	}
-
-	order, err := handler.shop.GetOrderBySessionID("cs_test_123")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if order.StockReserved != 1 {
-		t.Fatalf("stockReserved = %d, want 1", order.StockReserved)
-	}
-	if order.ExpiresAt < before+int64(reservationHold/time.Second) ||
-		order.ExpiresAt > before+int64((reservationHold+2*time.Minute)/time.Second) {
-		t.Fatalf("hold expiresAt = %d, want roughly now+hold", order.ExpiresAt)
-	}
-	// The Stripe session outlives the stock hold so the item frees up quickly
-	// while the page stays payable for Stripe's 30-minute minimum.
-	if stripeClient.lastParams.ExpiresAt < before+int64(sessionLifetime/time.Second) ||
-		stripeClient.lastParams.ExpiresAt > before+int64((sessionLifetime+2*time.Minute)/time.Second) {
-		t.Fatalf("session expiresAt = %d, want roughly now+session lifetime", stripeClient.lastParams.ExpiresAt)
-	}
-	if stripeClient.lastParams.ExpiresAt <= order.ExpiresAt {
-		t.Fatalf("session expiresAt = %d, want it after the hold %d", stripeClient.lastParams.ExpiresAt, order.ExpiresAt)
-	}
-}
-
-func TestCheckoutConflictWhenReservationExhaustsStock(t *testing.T) {
-	handler, _ := newTestHandler(t)
-	stripeClient := &fakeStripeClient{}
-	handler.WithStripe(stripeClient, StripeSettings{})
-
-	// Item 1 has a stock of 5; the first checkout takes all of it.
-	rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":5}`)
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d (%s)", rr.Code, http.StatusCreated, rr.Body.String())
-	}
-
-	rr = serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":1}`)
-	if rr.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want %d", rr.Code, http.StatusConflict)
-	}
-
-	// The first checkout's live hold owns the item, so the conflict reports
-	// when that hold ends instead of calling the item sold out.
-	var conflict checkoutConflict
-	if err := json.Unmarshal(rr.Body.Bytes(), &conflict); err != nil {
-		t.Fatal(err)
-	}
-	if conflict.ItemID != "1" || conflict.Available != 0 {
-		t.Fatalf("conflict = %+v, want item 1 with 0 available", conflict)
-	}
-	if conflict.ReservedUntil <= time.Now().Unix() {
-		t.Fatalf("reservedUntil = %d, want the active hold's expiry", conflict.ReservedUntil)
-	}
-
-	item, err := handler.shop.GetItemByID(1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if item.Stock != 0 {
-		t.Fatalf("stock = %d, want 0 with the reservation held", item.Stock)
-	}
-	if _, err := handler.shop.GetOrderBySessionID("cs_test_123"); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestCheckoutRestoresStockWhenSessionCreationFails(t *testing.T) {
+func TestCheckoutLeavesStockUntouchedWhenSessionCreationFails(t *testing.T) {
 	handler, _ := newTestHandler(t)
 	handler.WithStripe(&fakeStripeClient{err: errors.New("stripe unavailable")}, StripeSettings{})
 
@@ -261,11 +174,11 @@ func TestCheckoutRestoresStockWhenSessionCreationFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	if item.Stock != 5 {
-		t.Fatalf("stock = %d, want 5 restored after the failed session", item.Stock)
+		t.Fatalf("stock = %d, want 5 untouched after the failed session", item.Stock)
 	}
 }
 
-func TestCheckoutRestoresStockAndExpiresSessionWhenOrderInsertFails(t *testing.T) {
+func TestCheckoutExpiresSessionWhenOrderInsertFails(t *testing.T) {
 	handler, _ := newTestHandler(t)
 	stripeClient := &fakeStripeClient{session: &CheckoutSession{ID: "cs_dup", URL: "https://checkout.stripe.com/c/pay/cs_dup"}}
 	handler.WithStripe(stripeClient, StripeSettings{})
@@ -286,50 +199,11 @@ func TestCheckoutRestoresStockAndExpiresSessionWhenOrderInsertFails(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if item.Stock != 3 {
-		t.Fatalf("stock = %d, want 3 with the failed reservation restored", item.Stock)
+	if item.Stock != 5 {
+		t.Fatalf("stock = %d, want 5 untouched after the failed insert", item.Stock)
 	}
 
 	if len(stripeClient.expiredSessions) != 1 || stripeClient.expiredSessions[0] != "cs_dup" {
 		t.Fatalf("expired sessions = %v, want [cs_dup]", stripeClient.expiredSessions)
-	}
-}
-
-func TestCheckoutReleasesExpiredReservationsFirst(t *testing.T) {
-	handler, _ := newTestHandler(t)
-	handler.WithStripe(&fakeStripeClient{}, StripeSettings{})
-
-	// A stale hold takes the last item and has passed its window.
-	if ok, err := handler.shop.DecrementStock("1", 1); err != nil || !ok {
-		t.Fatalf("setup decrement failed: %v", err)
-	}
-	if _, err := handler.shop.InsertPendingOrder("cs_hold", &shopdata.Order{
-		Currency:      "usd",
-		StockReserved: 1,
-		ExpiresAt:     time.Now().Add(-time.Minute).Unix(),
-		Lines:         []*shopdata.OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 1}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	rr := serve(handler.Checkout, http.MethodPost, "/shop/checkout", `{"itemId":"1","quantity":5}`)
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d (%s)", rr.Code, http.StatusCreated, rr.Body.String())
-	}
-
-	item, err := handler.shop.GetItemByID(1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if item.Stock != 0 {
-		t.Fatalf("stock = %d, want 0 after the freed hold was re-reserved", item.Stock)
-	}
-
-	held, err := handler.shop.GetOrderBySessionID("cs_hold")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if held.Status != shopdata.OrderStatusExpired {
-		t.Fatalf("stale hold status = %q, want expired", held.Status)
 	}
 }

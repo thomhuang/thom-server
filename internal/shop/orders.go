@@ -32,10 +32,7 @@ type OrderLine struct {
 	Quantity       int    `json:"quantity"`
 }
 
-// Order is a Stripe Checkout purchase. StockReserved marks an order whose
-// stock was decremented when the session was created, and ExpiresAt is the
-// unix timestamp its reservation hold ends; both are internal state and stay
-// out of the API.
+// Order is a Stripe Checkout purchase.
 type Order struct {
 	ID               string       `json:"id"`
 	StripeSessionID  string       `json:"stripeSessionId"`
@@ -57,8 +54,6 @@ type Order struct {
 	RefundReason     string       `json:"refundReason"`
 	CreatedAt        string       `json:"createdAt"`
 	UpdatedAt        string       `json:"updatedAt"`
-	StockReserved    int          `json:"-"`
-	ExpiresAt        int64        `json:"-"`
 }
 
 // PaidDetails carries the customer and total information Stripe reports once a
@@ -83,23 +78,18 @@ type PaidDetails struct {
 // constant so the session and view-token lookups cannot drift apart.
 const orderColumns = `id, StripeSessionID, Status, CustomerEmail, CustomerName, ShippingAddress,
 	ShipName, ShipLine1, ShipLine2, ShipCity, ShipState, ShipPostalCode, ShipCountry,
-	AmountTotalCents, Currency, RefundedAt, RefundReason, CreatedAt, UpdatedAt,
-	StockReserved, ExpiresAt`
+	AmountTotalCents, Currency, RefundedAt, RefundReason, CreatedAt, UpdatedAt`
 
 // InsertPendingOrder records a Checkout Session and the lines the customer is
 // paying for. D1 has no interactive transactions, so the order row and its
-// lines are written as separate statements. A non-zero StockReserved with an
-// ExpiresAt persists a checkout-time stock reservation; the zero values keep
-// the legacy decrement-at-webhook behavior for pre-reservation orders.
+// lines are written as separate statements.
 func (m *Model) InsertPendingOrder(sessionID string, order *Order) (*Order, error) {
 	result, err := m.DB.Exec(
-		`INSERT INTO ShopOrders (StripeSessionID, Status, Currency, StockReserved, ExpiresAt)
-		 VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO ShopOrders (StripeSessionID, Status, Currency)
+		 VALUES (?, ?, ?)`,
 		sessionID,
 		OrderStatusPending,
 		currencyOr(order.Currency),
-		order.StockReserved,
-		order.ExpiresAt,
 	)
 	if err != nil {
 		return nil, err
@@ -287,8 +277,6 @@ func scanOrder(s scanner) (*Order, int, error) {
 		&order.RefundReason,
 		&order.CreatedAt,
 		&order.UpdatedAt,
-		&order.StockReserved,
-		&order.ExpiresAt,
 	)
 	if err != nil {
 		return nil, 0, err

@@ -123,11 +123,11 @@ section only records durable gotchas; operator action items live in
   `thom-server`; test is `wrangler.test.jsonc` → `thom-server-test`. Secrets are
   per-Worker, so a value set for one is absent on the other. See `CLOUDFLARE.md`.
 - **Known shop follow-ups:** only `checkout.session.completed` is handled (async
-  payment methods leave orders `pending`). Checkout now collects a **US-only**
-  shipping address (`CollectedInformation.ShippingDetails`), and an oversold
-  webhook is voided if the PaymentIntent is uncaptured, otherwise refunded, with
-  the order moved to `refunded`.
-- **Orders API (2026-09-18).** `GET /shop/orders` is paginated:
+  payment methods leave orders `pending`). Checkout collects a shipping address
+  restricted to US/CA/MX (`CollectedInformation.ShippingDetails`), and an
+  oversold webhook is voided if the PaymentIntent is uncaptured, otherwise
+  refunded, with the order moved to `refunded`.
+- **Orders API.** `GET /shop/orders` is paginated:
   `?limit=<1..100, default 20>&cursor=<last order id>`, response
   `{ "orders": [...], "nextCursor": "<id>|" }` (`""` means no more pages).
   `cursor` is the keyset of the previous page, not an offset. This replaced the
@@ -139,30 +139,26 @@ section only records durable gotchas; operator action items live in
   adds them to existing databases. A `refund_pending` order means a refund was
   requested but Stripe had not confirmed it; Stripe webhook redelivery retries
   it, and a `refund_pending` order with no payment intent is left for an operator.
-  `MarkOrderPaid` only transitions `pending` → `paid`, so a redelivered
-  `checkout.session.completed` event can never revive a `refunded` or
-  `refund_pending` order (which would re-decrement stock and re-send email).
-- **Stock reservation at checkout (2026-09-19).** `POST /shop/checkout`
-  decrements stock when the Checkout Session is created (conditional UPDATE,
-  loser gets 409) and records `StockReserved=1` plus a 30-minute hold in
-  `ShopOrders.ExpiresAt` (unix seconds); the session's `expires_at` is set to
-  match. The hold is released by the `checkout.session.expired` webhook (order
-  → `expired`, stock restored once — `MarkOrderExpired` only transitions
-  `pending`) and by a lazy sweep (`ReleaseExpiredReservations`) that runs on
-  every checkout, so a missed webhook cannot strand stock. On
-  `checkout.session.completed`, reserved orders skip the decrement-at-webhook
-  path; pre-reservation orders (`StockReserved=0`) keep it. If the order row
-  cannot be written after the reservation, stock is restored and the session
-  expired so it can never be paid unreserved. Requires
-  `checkout.session.expired` in the Stripe webhook subscription and a
-  thom-website admin-UI change for the `expired` status.
+  `MarkOrderPaid` only transitions `pending` or `expired` → `paid`, so a
+  redelivered `checkout.session.completed` event can never revive a `refunded`
+  or `refund_pending` order (which would re-decrement stock and re-send email).
+- **Stock is decremented on payment, not at checkout.** `POST /shop/checkout`
+  verifies each listing is published and has enough stock but takes nothing, so
+  an item only goes out of stock when the `checkout.session.completed` webhook
+  decrements it. `DecrementStock` uses a conditional `UPDATE ... WHERE Stock >= ?`
+  as the optimistic lock (D1 has no transactions): two buyers paying for the
+  last unit race, the winner decrements and the loser's UPDATE affects no rows →
+  oversold → `MarkOrderRefunded`. An abandoned checkout therefore never blocks a
+  listing — there is no hold, no sweeper, and no manual release. The
+  `checkout.session.expired` webhook only marks the order `expired` for the
+  admin list; `MarkOrderPaid` still allows `expired` → `paid` so a payment that
+  lands after an expiry is fulfilled or refunded.
 - **Checkout is multi-line.** `POST /shop/checkout` takes
   `{ "items": [{ "itemId", "quantity" }] }`; the legacy single-item
   `{ "itemId", "quantity" }` body is still accepted so an older storefront keeps
-  working against a newer server. Stock is reserved for every line
-  all-or-nothing (earlier reservations are restored if any line fails), and the
-  pending order snapshots one `ShopOrderLine` per item. The Stripe session has
-  one line item per cart line plus the flat shipping line.
+  working against a newer server. The pending order snapshots one `ShopOrderLine`
+  per item, and the Stripe session has one line item per cart line plus the flat
+  shipping line.
 - **`GET /shop/orders/{sessionId}` is public and returns no personal data.** It
   serves the buyer's confirmation page, keyed only on the Stripe session id, so
   it returns status/total/lines and omits customer name, email, and every
@@ -217,7 +213,7 @@ section only records durable gotchas; operator action items live in
   are dropped by `ensureShopItemColumns` via `data.DropColumns`. `GetItems`
   summaries include neither category nor measurements — only `GET /shop/items/{id}`
   does.
-- **Batch publish/unpublish (2026-09-20).** `PATCH /shop/items` (admin) takes
+- **Batch publish/unpublish.** `PATCH /shop/items` (admin) takes
   `{ "ids": [1, 2, ...], "isPublished": true|false }` and flips the flag for
   every matching listing in one statement. Batches are capped at 100 ids; an
   empty batch or a missing `isPublished` is a `400`. Unknown ids are ignored and
@@ -237,7 +233,7 @@ section only records durable gotchas; operator action items live in
   dir are blocked. Workaround: `go test -c -o
   "$env:LOCALAPPDATA\Temp\opencode\<pkg>.exe" <pkg>` and run that exe directly.
 
-## Blog images (2026-09-22)
+## Blog images
 
 Pasted blog-post images upload straight to R2, mirroring shop images, but a blog
 post does not exist yet while the author is writing it, so the cleanup model
@@ -251,21 +247,3 @@ uncommitted uploads from R2 and then from the table. The key format and the
 extraction regex both live in `internal/server/blog/images.go` and must stay in
 sync. Reuses the same `R2_BUCKET` and `R2_PUBLIC_BASE_URL` as shop, under a
 `blog/` key prefix, so the website CSP needs no change.
-
-## Garment measurements reference (2026-09-18)
-
-Measurements are open-ended. `ShopItemMeasurements` stores one `(Label,
-ValueInches)` row per measurement per item, so a listing can carry any labels and
-a new garment type needs no schema change. `ShopItems.Category` is a free-form
-hint (`tops`, `pants`, `outerwear`, …) that only drives the admin form's
-suggested labels; it is not enforced.
-
-| JSON field | Meaning |
-|---|---|
-| `category` | Free-form garment hint (e.g. `pants`); UI suggestion only |
-| `measurements[].label` | Any label, 1–60 chars, unique per item (case-insensitive) |
-| `measurements[].valueInches` | Inches, `0 < v ≤ 100`, rounded to one decimal |
-
-Absence is a missing row — there is no zero sentinel. `ensureShopItemColumns` in
-`internal/shop/schema.go` creates the table and drops the legacy flat columns
-(`PitToPitInches`, `BackLengthInches`, `ShoulderInches`) via `data.DropColumns`.

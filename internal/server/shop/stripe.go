@@ -36,22 +36,35 @@ func (c *stripeClient) CreateCheckoutSession(ctx context.Context, params Checkou
 	}
 
 	sessionParams := &stripe.CheckoutSessionCreateParams{
-		Mode:       stripe.String(string(stripe.CheckoutSessionModePayment)),
-		SuccessURL: stripe.String(params.SuccessURL),
-		CancelURL:  stripe.String(params.CancelURL),
-		LineItems:  lineItems,
-		// Shipping is US-only.
-		ShippingAddressCollection: &stripe.CheckoutSessionCreateShippingAddressCollectionParams{
-			AllowedCountries: []*string{stripe.String("US")},
+		UIMode:                   stripe.String(string(stripe.CheckoutSessionUIModeHostedPage)),
+		Mode:                     stripe.String(string(stripe.CheckoutSessionModePayment)),
+		SuccessURL:               stripe.String(params.SuccessURL),
+		CancelURL:                stripe.String(params.CancelURL),
+		LineItems:                lineItems,
+		BillingAddressCollection: stripe.String(string(stripe.CheckoutSessionBillingAddressCollectionAuto)),
+		PhoneNumberCollection: &stripe.CheckoutSessionCreatePhoneNumberCollectionParams{
+			Enabled: stripe.Bool(true),
 		},
+		AllowPromotionCodes: stripe.Bool(true),
+		SubmitType:          stripe.String(string(stripe.CheckoutSessionSubmitTypeAuto)),
+		ShippingAddressCollection: &stripe.CheckoutSessionCreateShippingAddressCollectionParams{
+			AllowedCountries: []*string{
+				stripe.String("CA"),
+				stripe.String("MX"),
+				stripe.String("US"),
+			},
+		},
+		NameCollection: &stripe.CheckoutSessionCreateNameCollectionParams{
+			Individual: &stripe.CheckoutSessionCreateNameCollectionIndividualParams{
+				Enabled: stripe.Bool(true),
+			},
+		},
+		OriginContext: stripe.String(string(stripe.CheckoutSessionOriginContextWeb)),
 	}
 	if params.TaxEnabled {
 		sessionParams.AutomaticTax = &stripe.CheckoutSessionCreateAutomaticTaxParams{
 			Enabled: stripe.Bool(true),
 		}
-	}
-	if params.ExpiresAt > 0 {
-		sessionParams.ExpiresAt = stripe.Int64(params.ExpiresAt)
 	}
 
 	session, err := c.client.V1CheckoutSessions.Create(ctx, sessionParams)
@@ -63,7 +76,7 @@ func (c *stripeClient) CreateCheckoutSession(ctx context.Context, params Checkou
 }
 
 // ExpireCheckoutSession kills a Checkout Session that must not be paid, for
-// example one whose order could not be recorded after its stock was reserved.
+// example one whose order row could not be recorded.
 func (c *stripeClient) ExpireCheckoutSession(ctx context.Context, sessionID string) error {
 	if c.client == nil {
 		return ErrStripeNotConfigured

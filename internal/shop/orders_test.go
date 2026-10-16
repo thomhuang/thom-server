@@ -2,7 +2,6 @@ package shop
 
 import (
 	"testing"
-	"time"
 )
 
 func TestInsertPendingOrderSnapshotsLines(t *testing.T) {
@@ -118,45 +117,5 @@ func TestListOrdersPagePagination(t *testing.T) {
 	}
 	if nextCursor != 0 {
 		t.Fatalf("nextCursor = %d, want 0 on the last page", nextCursor)
-	}
-}
-
-func TestInsertPendingOrderPersistsReservation(t *testing.T) {
-	model := newTestModel(t)
-
-	expiresAt := time.Now().Add(time.Hour).Unix()
-	order, err := model.InsertPendingOrder("cs_reserved", &Order{
-		Currency:      "usd",
-		StockReserved: 1,
-		ExpiresAt:     expiresAt,
-		Lines:         []*OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 1}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if order.Status != OrderStatusPending {
-		t.Fatalf("status = %q, want %q", order.Status, OrderStatusPending)
-	}
-
-	loaded, err := model.GetOrderBySessionID("cs_reserved")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.StockReserved != 1 {
-		t.Fatalf("stockReserved = %d, want 1", loaded.StockReserved)
-	}
-	if loaded.ExpiresAt != expiresAt {
-		t.Fatalf("expiresAt = %d, want %d", loaded.ExpiresAt, expiresAt)
-	}
-
-	legacy, err := model.InsertPendingOrder("cs_legacy_reservation", &Order{
-		Currency: "usd",
-		Lines:    []*OrderLine{{ItemID: "1", Title: "Test mug", UnitPriceCents: 1800, Quantity: 1}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if legacy.StockReserved != 0 || legacy.ExpiresAt != 0 {
-		t.Fatalf("legacy order = %d/%d, want the zero defaults", legacy.StockReserved, legacy.ExpiresAt)
 	}
 }

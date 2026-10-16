@@ -50,7 +50,7 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if event.Type == checkoutExpiredEventType {
-		h.expireReservedOrder(session.ID)
+		h.expireOrder(session.ID)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -145,15 +145,12 @@ func (h *Handler) handleDuplicatePaidSession(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusOK)
 }
 
-// fulfillPaidOrder decrements stock for pre-reservation orders and either
-// emails the buyer or refunds an oversold order.
+// fulfillPaidOrder decrements stock now that the payment has landed, then
+// either emails the buyer or refunds an oversold order. Stock is taken only
+// here, so an abandoned checkout never holds a listing; a race on the last unit
+// is caught by the conditional decrement and refunded.
 func (h *Handler) fulfillPaidOrder(w http.ResponseWriter, r *http.Request, sessionID string, order *shopdata.Order, viewToken, paymentIntentID string) {
-	oversold := false
-	if order.StockReserved != 1 {
-		// The stock was already decremented when the session was created for a
-		// reserved order; only pre-reservation orders decrement here.
-		oversold = h.decrementOrderStock(order)
-	}
+	oversold := h.decrementOrderStock(order)
 
 	if oversold {
 		if _, err := h.shop.MarkOrderRefundPending(sessionID, "oversold"); err != nil {
@@ -207,17 +204,10 @@ func (h *Handler) restoreStock(order *shopdata.Order, applied []*shopdata.OrderL
 	}
 }
 
-// expireReservedOrder releases the stock an abandoned Checkout Session held and
-// marks its order expired. The status guard on MarkOrderExpired makes this
-// idempotent, so a redelivered event or a race with the lazy sweep restores
-// stock exactly once.
-func (h *Handler) expireReservedOrder(sessionID string) {
-	order, err := h.shop.GetOrderBySessionID(sessionID)
-	if err != nil {
-		h.infoLog.Printf("expired session %s has no matching order: %v", sessionID, err)
-		return
-	}
-
+// expireOrder marks an abandoned Checkout Session expired. There is no stock to
+// restore because checkout never reserves it; this only keeps the order status
+// accurate for the admin list.
+func (h *Handler) expireOrder(sessionID string) {
 	changed, err := h.shop.MarkOrderExpired(sessionID)
 	if err != nil {
 		h.infoLog.Printf("failed to mark order %s expired: %v", sessionID, err)
@@ -229,10 +219,6 @@ func (h *Handler) expireReservedOrder(sessionID string) {
 	}
 
 	h.infoLog.Printf("STRIPE_WEBHOOK expired session=%s", sessionID)
-
-	if order.StockReserved == 1 {
-		h.restoreStock(order, order.Lines)
-	}
 }
 
 // refundOversoldOrder refunds a paid order that could not be fulfilled. With no

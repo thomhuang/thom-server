@@ -77,15 +77,10 @@ func main() {
 		authState,
 	)
 
-	// Expired checkout holds are released on a timer so an abandoned checkout
-	// frees its item even when no webhook is delivered and no new checkout
-	// arrives to trigger the lazy sweep.
+	// Pasted post images that were never saved are reclaimed on a timer, so an
+	// abandoned blog draft cannot leave objects in R2 forever.
 	sweeperCtx, stopSweeper := context.WithCancel(context.Background())
 	defer stopSweeper()
-	go app.RunReservationSweeper(sweeperCtx)
-
-	// Pasted post images that were never saved are reclaimed on the same timer,
-	// so an abandoned blog draft cannot leave objects in R2 forever.
 	go app.RunBlogUploadSweeper(sweeperCtx)
 
 	srv := &http.Server{

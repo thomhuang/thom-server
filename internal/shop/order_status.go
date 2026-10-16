@@ -73,15 +73,14 @@ func (m *Model) MarkOrderRefunded(sessionID string) (bool, error) {
 	)
 }
 
-// MarkOrderExpired records an expired Checkout Session and clears StockReserved,
-// because the reservation no longer holds stock. Clearing it means a payment
-// that arrives after the hold lapsed is treated as a fresh sale: it decrements
-// stock and fulfills, or refunds when the item is gone. Only a pending order can
-// expire, so a redelivered event or a race with payment updates nothing.
+// MarkOrderExpired records an expired Checkout Session. Stock is not restored
+// here because checkout never reserves it; this only keeps the order status
+// accurate for the admin list. Only a pending order can expire, so a redelivered
+// event or a race with payment updates nothing.
 func (m *Model) MarkOrderExpired(sessionID string) (bool, error) {
 	return m.execChanged(
 		`UPDATE ShopOrders
-		 SET Status = ?, StockReserved = 0, UpdatedAt = datetime('now')
+		 SET Status = ?, UpdatedAt = datetime('now')
 		 WHERE StripeSessionID = ? AND Status = ?`,
 		OrderStatusExpired,
 		sessionID,
