@@ -108,18 +108,19 @@ cp .env.example .env.local   # non-secret config only
 `go run ./cmd/server` loads `.env.local` before reading the environment, and
 existing shell or container variables take precedence. The server has no local
 database: `.env.example` points `D1_DATABASE_ID` and the R2 values at the
-**test** environment (`wrangler.test.jsonc`). Keep the **non-secret** values in
-`.env.local` and run the server through `scripts/dev-bw.ps1`, which resolves the
-secrets from Bitwarden. The server refuses to start without D1 configured.
+**test** environment (`wrangler.test.jsonc`). `.env.local` holds the remaining
+non-secret config; values referenced from Bitwarden (including non-secret
+`D1_*`/`R2_*` resource config) are injected by `scripts/dev-bw.ps1`. The server
+refuses to start without D1 configured.
 
 ### Secrets (Bitwarden)
 
-Secrets are referenced, never stored in the repo: the committed `.env.bw` holds
-the Bitwarden login-item name (or id) for each variable. `scripts/dev-bw.ps1`
-matches each item by exact name or id, so the values are injected into the
-server process only — nothing is written to disk and your shell is left
-untouched. Exact matching keeps a dev item apart from a similarly named
-production (`PRD …`) item.
+Secrets are referenced, never stored in the repo: the committed `.env.bw` maps
+each config variable to a Bitwarden login item, given by its exact name,
+username, or id. `scripts/dev-bw.ps1` matches each item by exact name,
+username, or id, so the values are injected into the server process only —
+nothing is written to disk and your shell is left untouched. Exact matching
+keeps a dev item apart from a similarly named production (`PRD …`) item.
 
 One-time setup: install the CLI and open a new shell so `bw` is on `PATH`:
 
