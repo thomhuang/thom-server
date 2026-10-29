@@ -30,6 +30,8 @@ type Entry struct {
 	BloomTime        string  `json:"bloomTime"`
 	BloomWater       int     `json:"bloomWater"`
 	PourNotes        string  `json:"pourNotes"`
+	ProfileID        string  `json:"profileId"`
+	SessionNotes     string  `json:"sessionNotes"`
 	RoastLevel       string  `json:"roastLevel"`
 	Notes            string  `json:"notes"`
 	TastingNotes     string  `json:"tastingNotes,omitempty"`
@@ -47,6 +49,14 @@ type Grinder struct {
 	ID        string `json:"id"`
 	Grinder   string `json:"grinder"`
 	CreatedAt string `json:"createdAt,omitempty"`
+}
+
+type Profile struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	BrewMethod string `json:"brewMethod"`
+	Notes      string `json:"notes"`
+	CreatedAt  string `json:"createdAt,omitempty"`
 }
 
 type Model struct {

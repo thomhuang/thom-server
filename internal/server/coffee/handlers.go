@@ -1,6 +1,7 @@
 package coffee
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -149,5 +150,29 @@ func (h *Handler) normalizeAndValidateEntry(w http.ResponseWriter, entry *coffee
 		return false
 	}
 
+	if err := h.validateEntryProfile(entry); err != nil {
+		h.infoLog.Printf("invalid entry profile: %v", err)
+		h.responder.BadRequest(w)
+		return false
+	}
+
 	return true
+}
+
+// validateEntryProfile requires a referenced profile to exist and share the
+// entry's brew method, so a saved entry never points at a mismatched recipe.
+func (h *Handler) validateEntryProfile(entry *coffeedata.Entry) error {
+	if entry.ProfileID == "" {
+		return nil
+	}
+
+	profile, err := h.coffee.GetProfileByID(entry.ProfileID)
+	if err != nil {
+		return fmt.Errorf("profile %q not found", entry.ProfileID)
+	}
+	if profile.BrewMethod != entry.BrewMethod {
+		return fmt.Errorf("profile %q brew method %q does not match entry brew method %q", entry.ProfileID, profile.BrewMethod, entry.BrewMethod)
+	}
+
+	return nil
 }

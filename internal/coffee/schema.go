@@ -60,7 +60,15 @@ func (m *Model) EnsureSchema() error {
 		);
 
 		CREATE INDEX IF NOT EXISTS CoffeeGrindersSortIndex
-		ON CoffeeGrinders(SortOrder ASC, Grinder COLLATE NOCASE ASC);`
+		ON CoffeeGrinders(SortOrder ASC, Grinder COLLATE NOCASE ASC);
+
+		CREATE TABLE IF NOT EXISTS CoffeeProfiles (
+			id TEXT PRIMARY KEY,
+			Name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+			BrewMethod TEXT NOT NULL,
+			Notes TEXT NOT NULL DEFAULT '',
+			CreatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+		);`
 
 	if _, err := m.DB.Exec(stmt); err != nil {
 		return err
@@ -91,6 +99,8 @@ func (m *Model) ensureCoffeeEntryColumns() error {
 		{Name: "CoffeeVarietal", Definition: "CoffeeVarietal TEXT NOT NULL DEFAULT ''"},
 		{Name: "ProcessingMethod", Definition: "ProcessingMethod TEXT NOT NULL DEFAULT ''"},
 		{Name: "GrinderID", Definition: "GrinderID TEXT NOT NULL DEFAULT ''"},
+		{Name: "ProfileID", Definition: "ProfileID TEXT NOT NULL DEFAULT ''"},
+		{Name: "SessionNotes", Definition: "SessionNotes TEXT NOT NULL DEFAULT ''"},
 	})
 }
 

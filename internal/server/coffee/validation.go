@@ -30,6 +30,8 @@ type coffeeEntryPatch struct {
 	BloomTime        *string  `json:"bloomTime"`
 	BloomWater       *int     `json:"bloomWater"`
 	PourNotes        *string  `json:"pourNotes"`
+	ProfileID        *string  `json:"profileId"`
+	SessionNotes     *string  `json:"sessionNotes"`
 	RoastLevel       *string  `json:"roastLevel"`
 	Notes            *string  `json:"notes"`
 	TastingNotes     *string  `json:"tastingNotes"`
@@ -64,6 +66,8 @@ func normalizeCoffeeEntry(entry *coffeedata.Entry) {
 	entry.BrewTime = strings.TrimSpace(entry.BrewTime)
 	entry.BloomTime = strings.TrimSpace(entry.BloomTime)
 	entry.PourNotes = strings.TrimSpace(entry.PourNotes)
+	entry.ProfileID = strings.TrimSpace(entry.ProfileID)
+	entry.SessionNotes = strings.TrimSpace(entry.SessionNotes)
 	entry.RoastLevel = strings.TrimSpace(entry.RoastLevel)
 	entry.Notes = strings.TrimSpace(entry.Notes)
 	entry.TastingNotes = strings.TrimSpace(entry.TastingNotes)
@@ -147,6 +151,12 @@ func applyCoffeeEntryPatch(entry *coffeedata.Entry, patch *coffeeEntryPatch) {
 	}
 	if patch.PourNotes != nil {
 		entry.PourNotes = *patch.PourNotes
+	}
+	if patch.ProfileID != nil {
+		entry.ProfileID = *patch.ProfileID
+	}
+	if patch.SessionNotes != nil {
+		entry.SessionNotes = *patch.SessionNotes
 	}
 	if patch.RoastLevel != nil {
 		entry.RoastLevel = *patch.RoastLevel

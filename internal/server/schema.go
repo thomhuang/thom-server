@@ -9,7 +9,7 @@ import (
 // container can skip the idempotent DDL when the database already has the
 // current schema. Bump it in the same change as the schema: a stale version
 // silently skips new migrations on existing databases.
-const schemaVersion = "2026-09-25"
+const schemaVersion = "2026-10-28"
 
 // schemaEnsurer runs a model's idempotent schema setup.
 type schemaEnsurer interface {

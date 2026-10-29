@@ -11,7 +11,7 @@ import (
 const entryColumns = `id, BrewDate, CoffeeName, Origin, CoffeeVarietal, ProcessingMethod,
 	DaysSinceRoast, RoasterID, Roaster, BrewMethod, Ratio, GrinderID, Grinder,
 	GrindSetting, Dose, YieldAmount, WaterTemperature, BrewTime,
-	BloomTime, BloomWater, PourNotes, RoastLevel, Notes, Rating, CreatedAt`
+	BloomTime, BloomWater, PourNotes, ProfileID, SessionNotes, RoastLevel, Notes, Rating, CreatedAt`
 
 // GetAll returns every entry in full. The list view renders the same fields as
 // the detail view, so returning summaries would only force a follow-up request
@@ -67,9 +67,9 @@ func (m *Model) Insert(entry *Entry) (*Entry, error) {
 			BrewDate, CoffeeName, Origin, CoffeeVarietal, ProcessingMethod,
 			DaysSinceRoast, RoasterID, Roaster, BrewMethod, Ratio, GrinderID, Grinder,
 			GrindSetting, Dose, YieldAmount, WaterTemperature, BrewTime,
-			BloomTime, BloomWater, PourNotes, RoastLevel, Notes, Rating
+			BloomTime, BloomWater, PourNotes, ProfileID, SessionNotes, RoastLevel, Notes, Rating
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	result, err := m.DB.Exec(
 		stmt,
@@ -93,6 +93,8 @@ func (m *Model) Insert(entry *Entry) (*Entry, error) {
 		entry.BloomTime,
 		entry.BloomWater,
 		entry.PourNotes,
+		entry.ProfileID,
+		entry.SessionNotes,
 		entry.RoastLevel,
 		entry.Notes,
 		entry.Rating,
@@ -136,6 +138,8 @@ func (m *Model) Update(id int, entry *Entry) (*Entry, error) {
 			BloomTime = ?,
 			BloomWater = ?,
 			PourNotes = ?,
+			ProfileID = ?,
+			SessionNotes = ?,
 			RoastLevel = ?,
 			Notes = ?,
 			Rating = ?
@@ -163,6 +167,8 @@ func (m *Model) Update(id int, entry *Entry) (*Entry, error) {
 		entry.BloomTime,
 		entry.BloomWater,
 		entry.PourNotes,
+		entry.ProfileID,
+		entry.SessionNotes,
 		entry.RoastLevel,
 		entry.Notes,
 		entry.Rating,
@@ -251,6 +257,8 @@ func scanCoffeeEntry(s scanner) (*Entry, error) {
 		&entry.BloomTime,
 		&entry.BloomWater,
 		&entry.PourNotes,
+		&entry.ProfileID,
+		&entry.SessionNotes,
 		&entry.RoastLevel,
 		&entry.Notes,
 		&entry.Rating,
