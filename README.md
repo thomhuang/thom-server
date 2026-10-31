@@ -92,6 +92,7 @@ Authenticated with the session cookie:
 
 - `GET /auth/me`, `POST /auth/logout`
 - `POST /blog`, `PATCH /blog/{id}`, `DELETE /blog/{id}`
+- `GET /blog/draft`, `PUT /blog/draft`, `DELETE /blog/draft` (single-slot autosave of the in-progress "new post" form)
 - `POST /coffee`, `PATCH /coffee/{id}`, `DELETE /coffee/{id}`
 - `POST /coffee/roasters`, `POST /coffee/grinders`
 - `POST /shop/items`, `PATCH /shop/items/{id}`, `DELETE /shop/items/{id}`

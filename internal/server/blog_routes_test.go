@@ -23,6 +23,9 @@ func TestBlogMutatingRoutesRequireAuth(t *testing.T) {
 		{method: http.MethodPatch, path: "/blog/1", body: `{}`},
 		{method: http.MethodDelete, path: "/blog/1"},
 		{method: http.MethodPost, path: "/blog/images/presign", body: `{"contentType":"image/png"}`},
+		{method: http.MethodGet, path: "/blog/draft"},
+		{method: http.MethodPut, path: "/blog/draft", body: `{"title":"x"}`},
+		{method: http.MethodDelete, path: "/blog/draft"},
 	}
 
 	for _, tt := range tests {

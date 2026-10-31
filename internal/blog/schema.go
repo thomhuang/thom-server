@@ -23,6 +23,15 @@ func (m *Model) EnsureSchema() error {
 		CREATE TABLE IF NOT EXISTS BlogUploads (
 			ObjectKey TEXT PRIMARY KEY,
 			CreatedAt INTEGER NOT NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS BlogDraft (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			Title TEXT NOT NULL DEFAULT '',
+			Body TEXT NOT NULL DEFAULT '',
+			Category TEXT NOT NULL DEFAULT '',
+			Published INTEGER NOT NULL DEFAULT 0,
+			UpdatedAt TEXT NOT NULL DEFAULT (datetime('now'))
 		);`
 
 	if _, err := m.DB.Exec(stmt); err != nil {

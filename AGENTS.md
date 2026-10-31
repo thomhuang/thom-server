@@ -247,3 +247,14 @@ uncommitted uploads from R2 and then from the table. The key format and the
 extraction regex both live in `internal/server/blog/images.go` and must stay in
 sync. Reuses the same `R2_BUCKET` and `R2_PUBLIC_BASE_URL` as shop, under a
 `blog/` key prefix, so the website CSP needs no change.
+
+## Blog draft autosave
+
+The in-progress "new post" form is autosaved to a single-row `BlogDraft` table
+(`id` constrained to 1) so leaving the editor does not lose it. `GET/PUT/DELETE
+/blog/draft` (admin) read, upsert, and clear that row; the website restores it on
+open, PUTs it debounced while typing, and deletes it after a successful create.
+Unlike a real post, a draft has no required fields — only the length caps apply.
+There is deliberately one slot, so starting a new post overwrites the previous
+unsaved one; editing an existing post is not autosaved (its content is already
+stored). `schemaVersion` was bumped for the new table.

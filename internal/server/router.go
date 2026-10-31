@@ -32,6 +32,9 @@ func (app *App) routes() *http.ServeMux {
 	mux.HandleFunc("PATCH /blog/{id}", app.auth.RequireAuth(blogHandler.UpdatePost))
 	mux.HandleFunc("DELETE /blog/{id}", app.auth.RequireAuth(blogHandler.DeletePost))
 	mux.HandleFunc("POST /blog/images/presign", app.auth.RequireAuth(blogHandler.PresignImageUpload))
+	mux.HandleFunc("GET /blog/draft", app.auth.RequireAuth(blogHandler.GetDraft))
+	mux.HandleFunc("PUT /blog/draft", app.auth.RequireAuth(blogHandler.PutDraft))
+	mux.HandleFunc("DELETE /blog/draft", app.auth.RequireAuth(blogHandler.DeleteDraft))
 
 	mux.HandleFunc("POST /auth/login", app.requireAllowedOrigin(app.auth.Login))
 	mux.HandleFunc("POST /auth/logout", app.auth.RequireAuth(app.auth.Logout))

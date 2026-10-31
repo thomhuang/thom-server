@@ -64,3 +64,19 @@ func isValidPost(post *blogdata.Post) error {
 
 	return nil
 }
+
+// isValidDraft bounds an autosaved draft's field lengths. Unlike a real post,
+// no field is required: a scratch buffer can be incomplete.
+func isValidDraft(draft *blogdata.Draft) error {
+	if len([]rune(draft.Title)) > maxTitleLength {
+		return fmt.Errorf("title must be at most %d characters", maxTitleLength)
+	}
+	if len([]rune(draft.Body)) > maxBodyLength {
+		return fmt.Errorf("body must be at most %d characters", maxBodyLength)
+	}
+	if len([]rune(draft.Category)) > maxCategoryLength {
+		return fmt.Errorf("category must be at most %d characters", maxCategoryLength)
+	}
+
+	return nil
+}
